@@ -17,6 +17,9 @@ import { getVisitorId } from "./visitor";
 
 export const TAG = "talkfront-widget";
 
+/** A host page's own option shown next to Talk | Type (Halochime.setSwitch). */
+export type SwitchOptions = { label: string; onSelect: () => void };
+
 type MicState = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "muted";
 
 const MIC_LABEL: Record<MicState, string> = {
@@ -184,6 +187,11 @@ export class TalkfrontWidget extends HTMLElement {
   private emptyGreeting!: HTMLParagraphElement;
   private emptyHint!: HTMLParagraphElement;
   private modesEl!: HTMLDivElement;
+  /** Optional third button next to Talk | Type, set by the host page (Halochime.setSwitch). */
+  private switchBtn!: HTMLButtonElement;
+  private switchAction: SwitchOptions | null = null;
+  /** Hidden by the host page (Halochime.hide), e.g. while its own chat is open. */
+  private hiddenByHost = false;
   private modeBtns!: Record<ConversationMode, HTMLButtonElement>;
   private endBtn!: HTMLButtonElement;
   private voiceEl!: HTMLDivElement;
@@ -226,7 +234,7 @@ export class TalkfrontWidget extends HTMLElement {
 
   async open(): Promise<void> {
     if (!this.built) this.build();
-    if (this.isOpen) return;
+    if (this.isOpen || this.hiddenByHost) return;
     this.isOpen = true;
     this.settleClose();
     this.panel.hidden = false;
@@ -239,6 +247,32 @@ export class TalkfrontWidget extends HTMLElement {
       await this.configLoad;
       if (this.isOpen) this.render();
     }
+  }
+
+  /**
+   * A third button after Talk | Type that hands the visitor to something else on the page (the site's
+   * own text assistant, say). Clicking it ends the conversation, closes the panel, then calls onSelect.
+   * null removes it; calling again replaces it.
+   */
+  setSwitch(options: SwitchOptions | null): void {
+    this.switchAction = options;
+    if (!this.built) return;
+    this.switchBtn.textContent = options?.label ?? "";
+    this.render();
+  }
+
+  /** Hides the whole widget, launcher and panel (an open conversation ends). */
+  hide(): void {
+    this.hiddenByHost = true;
+    if (!this.built) return;
+    this.close();
+    this.rootEl.hidden = true;
+  }
+
+  /** Shows the widget again, closed. */
+  show(): void {
+    this.hiddenByHost = false;
+    if (this.built) this.rootEl.hidden = false;
   }
 
   close(): void {
@@ -394,11 +428,23 @@ export class TalkfrontWidget extends HTMLElement {
     };
     this.modeBtns.voice.addEventListener("click", () => void this.switchMode("voice"));
     this.modeBtns.text.addEventListener("click", () => void this.switchMode("text"));
+    this.switchBtn = h("button", { type: "button", class: "mode-btn switch-btn", hidden: true });
+    this.switchBtn.addEventListener("click", () => {
+      const action = this.switchAction;
+      if (!action) return;
+      this.close();
+      try {
+        action.onSelect();
+      } catch (err) {
+        console.error("[Halochime] setSwitch onSelect() failed", err);
+      }
+    });
     this.modesEl = h(
       "div",
       { class: "modes", role: "group", "aria-label": "How do you want to chat?" },
       this.modeBtns.voice,
       this.modeBtns.text,
+      this.switchBtn,
     );
     this.endBtn = h("button", { type: "button", class: "end-btn", "aria-label": "End conversation", hidden: true }, "End");
     this.endBtn.addEventListener("click", () => void this.endSession("Conversation ended"));
@@ -465,7 +511,8 @@ export class TalkfrontWidget extends HTMLElement {
     this.audioEl = h("audio", { autoplay: true, hidden: true });
     this.audioEl.setAttribute("playsinline", "");
 
-    this.rootEl = h("div", { class: "root" }, this.launcher, this.panel, this.audioEl);
+    this.rootEl = h("div", { class: "root", hidden: this.hiddenByHost }, this.launcher, this.panel, this.audioEl);
+    this.switchBtn.textContent = this.switchAction?.label ?? "";
     shadow.append(style, this.rootEl);
   }
 
@@ -486,7 +533,8 @@ export class TalkfrontWidget extends HTMLElement {
     this.panel.dataset.mode = this.mode;
 
     // Modes: show only what the config allows; hide the switch when there is one choice.
-    this.modesEl.hidden = modes.length < 2;
+    this.switchBtn.hidden = !this.switchAction;
+    this.modesEl.hidden = modes.length + (this.switchAction ? 1 : 0) < 2;
     for (const m of ["voice", "text"] as const) {
       this.modeBtns[m].hidden = !modes.includes(m);
       this.modeBtns[m].setAttribute("aria-pressed", String(this.mode === m));

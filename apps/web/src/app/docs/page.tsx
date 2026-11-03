@@ -624,6 +624,11 @@ export default function DocsPage() {
                 [<C key="c">Halochime.close()</C>, "Closes it."],
                 [<C key="i">{"Halochime.identify({ token })"}</C>, <>Signs in the visitor for their next conversation with an <a href="#identity" className="font-medium text-brand-700 underline underline-offset-2">identity token</a>.</>],
                 [<C key="l">Halochime.logout()</C>, "Forgets the signed-in visitor. Call it when your user signs out."],
+                [
+                  <C key="s">{"Halochime.setSwitch({ label, onSelect })"}</C>,
+                  "Adds a button next to Talk and Type that hands the visitor to something else on your page, like your own help chat. Clicking it ends the conversation, closes the panel and calls onSelect. Pass null to remove it.",
+                ],
+                [<C key="h">Halochime.hide() / show()</C>, "Hides the whole widget (an open conversation ends), or brings the button back."],
               ]}
             />
             <H3>Call it before the script loads</H3>

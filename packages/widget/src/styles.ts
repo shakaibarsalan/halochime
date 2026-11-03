@@ -371,6 +371,11 @@ button:disabled { cursor: default; }
   box-shadow: var(--tf-raised);
 }
 .mode-btn:focus-visible { outline-offset: 1px; }
+/* The host page's own option (Halochime.setSwitch): same shape, never "pressed", trimmed if long. */
+.switch-btn { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 380px) {
+  .mode-btn { min-width: 0; padding: 0 11px; }
+}
 .end-btn {
   flex: none; min-height: 32px; padding: 0 14px; border-radius: 999px;
   display: inline-flex; align-items: center; gap: 7px;

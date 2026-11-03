@@ -49,6 +49,8 @@ window.Halochime = window.Halochime || { q: [] };
 | `Halochime.close()` | Closes it |
 | `Halochime.identify({ token })` | Signs in the visitor for the next conversation (identity token, section 3) |
 | `Halochime.logout()` | Forgets the identity (call on sign-out) |
+| `Halochime.setSwitch({ label, onSelect })` | Adds a button after Talk / Type that hands the visitor to something else on your page (your own help chat, say): clicking it ends the conversation, closes the panel, then calls `onSelect()`. `null` removes it; calling again replaces it. Label up to 40 characters |
+| `Halochime.hide()` / `Halochime.show()` | Hides the whole widget (an open conversation ends; `open()` does nothing while hidden) / shows the launcher again, closed |
 
 The token can also be given on the tag: `data-identity-token="eyJ..."` (server-rendered pages).
 Pre-load queue: if `window.Halochime.q` is an array of `[method, ...args]` when the script loads, the loader

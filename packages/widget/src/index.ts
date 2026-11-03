@@ -1,4 +1,4 @@
-import { TAG, TalkfrontWidget } from "./widget";
+import { TAG, TalkfrontWidget, type SwitchOptions } from "./widget";
 
 /**
  * Loader for:
@@ -22,6 +22,12 @@ interface TalkfrontApi {
   identify(options: { token: string }): void;
   /** Forgets the signed-in visitor (call on sign-out). Applies to the next conversation. */
   logout(): void;
+  /** Adds a third button after Talk | Type (e.g. your own text assistant). null removes it. */
+  setSwitch(options: SwitchOptions | null): void;
+  /** Hides the whole widget (an open conversation ends). */
+  hide(): void;
+  /** Shows it again, closed. */
+  show(): void;
   /** Calls pushed here after load run at once, so stub-style snippets keep working. */
   q: { push(...calls: QueuedCall[]): number };
 }
@@ -34,6 +40,7 @@ declare global {
   }
 }
 
+const API_METHODS = new Set(["open", "close", "identify", "logout", "setSwitch", "hide", "show"]);
 const MAX_TOKEN_LENGTH = 4096;
 const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
@@ -98,6 +105,17 @@ function boot(): void {
       if (token) el.setIdentity(token);
     },
     logout: () => el.setIdentity(null),
+    setSwitch: (options) => {
+      if (options === null || options === undefined) return el.setSwitch(null);
+      const label = typeof options.label === "string" ? options.label.trim().slice(0, 40) : "";
+      if (!label || typeof options.onSelect !== "function") {
+        console.warn("[Halochime] setSwitch needs { label: string, onSelect: function }, or null to remove it.");
+        return;
+      }
+      el.setSwitch({ label, onSelect: options.onSelect });
+    },
+    hide: () => el.hide(),
+    show: () => el.show(),
     q: {
       push: (...calls) => {
         for (const call of calls) run(call);
@@ -108,7 +126,7 @@ function boot(): void {
   const run = (call: unknown) => {
     if (!Array.isArray(call) || typeof call[0] !== "string") return;
     const [method, ...args] = call as QueuedCall;
-    const fn = method === "open" || method === "close" || method === "identify" || method === "logout" ? api[method] : null;
+    const fn = API_METHODS.has(method) ? api[method as keyof Omit<TalkfrontApi, "q">] : null;
     if (!fn) {
       console.warn(`[Halochime] Unknown method "${method}" in Halochime.q.`);
       return;
