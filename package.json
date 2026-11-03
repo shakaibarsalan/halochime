@@ -1,0 +1,23 @@
+{
+  "name": "talkfront",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Voice-first support agent that any business can embed on its website or user portal.",
+  "workspaces": [
+    "apps/web",
+    "packages/shared",
+    "packages/widget"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @talkfront/widget && npm run dev -w @talkfront/web",
+    "dev:widget": "npm run dev -w @talkfront/widget",
+    "build": "npm run build -w @talkfront/widget && npm run build -w @talkfront/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:up": "docker compose up -d db",
+    "db:generate": "npm run db:generate -w @talkfront/web",
+    "db:migrate": "npm run db:migrate -w @talkfront/web"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

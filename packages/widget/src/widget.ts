@@ -1,0 +1,976 @@
+import type { ConversationMode, WidgetConfigResponse, WidgetIconShape } from "@talkfront/shared";
+import { createSession, fetchConfig, toWidgetError, WidgetError, type ErrorKind } from "./api";
+import { h, icon, isTouchDevice } from "./dom";
+import { renderRich } from "./rich";
+import { ICON_CLOSE, ICON_MIC, ICON_MIC_OFF, ICON_SEND, ICON_WAVE, shapeIcon } from "./icons";
+import {
+  LIVE_CAPTION_ID,
+  openMicrophone,
+  Session,
+  warmUpConnection,
+  type AgentActivity,
+  type Segment,
+  type SessionEvents,
+} from "./session";
+import { STYLES } from "./styles";
+import { getVisitorId } from "./visitor";
+
+export const TAG = "talkfront-widget";
+
+type MicState = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "muted";
+
+const MIC_LABEL: Record<MicState, string> = {
+  idle: "Tap to talk",
+  connecting: "Connecting…",
+  listening: "Listening…",
+  thinking: "Thinking…",
+  speaking: "Speaking…",
+  muted: "Muted",
+};
+
+const MIC_ARIA: Record<MicState, string> = {
+  idle: "Start talking",
+  connecting: "Connecting",
+  listening: "Mute microphone",
+  thinking: "Mute microphone",
+  speaking: "Mute microphone",
+  muted: "Unmute microphone",
+};
+
+const MAX_MESSAGE_CHARS = 4000;
+
+interface StartAttempt {
+  mode: ConversationMode;
+  promise: Promise<Session | null>;
+}
+
+interface NoticeAction {
+  label: string;
+  run: () => void;
+}
+
+/** Visitor-friendly copy for each failure. */
+function errorText(kind: ErrorKind): string {
+  switch (kind) {
+    case "mic_denied":
+      return "Microphone access is blocked. Allow it in your browser settings and try again.";
+    case "mic_missing":
+      return "We couldn't find a microphone you can use.";
+    case "out_of_credit":
+      return "Voice chat isn't available right now.";
+    case "not_configured":
+      return "This assistant isn't set up yet. Please try again later.";
+    case "origin_not_allowed":
+      return "This assistant isn't enabled on this website.";
+    case "not_found":
+      return "This assistant isn't available right now.";
+    case "rate_limited":
+      return "Too many attempts. Please wait a few minutes and try again.";
+    case "network":
+      return "We can't connect right now. Check your internet connection and try again.";
+    case "agent_unavailable":
+      return "The assistant didn't answer. Please try again.";
+    default:
+      return "Something went wrong. Please try again.";
+  }
+}
+
+/** Readable text colour for a theme colour (hex only; anything else keeps white). */
+function onAccent(color: string): string {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return "#ffffff";
+  let hex = m[1]!;
+  if (hex.length === 3) hex = hex.replace(/./g, (c) => c + c);
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.45 ? "#111827" : "#ffffff";
+}
+
+function pageInfo(): { url: string; title?: string } {
+  // Origin + path only: query strings and hashes can carry visitors' tokens.
+  const url = `${location.origin}${location.pathname}`.slice(0, 2048);
+  const title = document.title.trim().slice(0, 300);
+  return title ? { url, title } : { url };
+}
+
+interface VisitorTurn {
+  li: HTMLLIElement;
+  /** Segment id -> latest text, in arrival order. */
+  texts: Map<string, string>;
+  /** Segments still interim. */
+  pending: Set<string>;
+  /** When the bubble appeared (for giving up on a transcript that never comes). */
+  startedAt: number;
+}
+
+/** A spoken turn shown from live captions waits at most this long for its real transcript. */
+const TRANSCRIPT_WAIT_MS = 30_000;
+/** Share of shared words for a transcript to belong to a waiting bubble that is not the oldest. */
+const MATCH_MIN_OVERLAP = 0.4;
+
+function isLiveCaption(id: string): boolean {
+  return id === LIVE_CAPTION_ID || id.startsWith(`${LIVE_CAPTION_ID}:`);
+}
+
+function hasTranscript(turn: VisitorTurn): boolean {
+  return [...turn.texts.keys()].some((k) => k !== LIVE_CAPTION_ID);
+}
+
+function wordsOf(text: string): string[] {
+  // Vowel signs (\p{M}) belong to the word: without them Hindi words fall apart into letters.
+  return text.toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+}
+
+/** Shared words between two texts, from 0 to 1 (of the longer one). */
+function wordOverlap(a: string, b: string): number {
+  const wa = wordsOf(a);
+  const wb = wordsOf(b);
+  if (!wa.length || !wb.length) return 0;
+  const set = new Set(wa);
+  return wb.filter((w) => set.has(w)).length / Math.max(wa.length, wb.length);
+}
+
+export class TalkfrontWidget extends HTMLElement {
+  private key = "";
+  private api = "";
+  private built = false;
+
+  private config: WidgetConfigResponse | null = null;
+  private configError: WidgetError | null = null;
+  private configLoad: Promise<void> | null = null;
+
+  private isOpen = false;
+  private mode: ConversationMode = "voice";
+  private session: Session | null = null;
+  private starting: StartAttempt | null = null;
+  private activity: AgentActivity = "connecting";
+  private conversationHasContent = false;
+  /** After a failed start, typing no longer auto-connects until the visitor presses Send or Retry. */
+  private prewarmBlocked = false;
+
+  private bubbles = new Map<string, HTMLLIElement>();
+  /** The visitor's current spoken turn: all its caption segments share one bubble. */
+  private visitorTurn: VisitorTurn | null = null;
+  /**
+   * Realtime voices: turns shown from live captions, oldest first, still waiting for the model's own
+   * transcript. That transcript often arrives after the agent has started answering, so it must go
+   * into the bubble it belongs to, not into a new bubble below the answer (which showed every visitor
+   * message twice).
+   */
+  private awaitingTranscript: VisitorTurn[] = [];
+  /** Which bubble a real transcript segment went into, so its updates land there too. */
+  private segmentTurns = new Map<string, VisitorTurn>();
+  private typingEl: HTMLLIElement | null = null;
+
+  // DOM (created in build()).
+  private rootEl!: HTMLDivElement;
+  private launcher!: HTMLButtonElement;
+  private launcherLabel!: HTMLSpanElement;
+  private launcherOrb!: HTMLSpanElement;
+  private avatarEl!: HTMLSpanElement;
+  private panel!: HTMLElement;
+  private closeTimer = 0;
+  private titleEl!: HTMLHeadingElement;
+  private statusEl!: HTMLDivElement;
+  private noticeEl!: HTMLDivElement;
+  private noticeText!: HTMLDivElement;
+  private noticeBtn!: HTMLButtonElement;
+  private noticeAction: NoticeAction | null = null;
+  private log!: HTMLOListElement;
+  private emptyEl!: HTMLLIElement;
+  private emptyGreeting!: HTMLParagraphElement;
+  private emptyHint!: HTMLParagraphElement;
+  private modesEl!: HTMLDivElement;
+  private modeBtns!: Record<ConversationMode, HTMLButtonElement>;
+  private endBtn!: HTMLButtonElement;
+  private voiceEl!: HTMLDivElement;
+  private micBtn!: HTMLButtonElement;
+  private micLabel!: HTMLDivElement;
+  private textForm!: HTMLFormElement;
+  private input!: HTMLInputElement;
+  private sendBtn!: HTMLButtonElement;
+  private brandEl!: HTMLDivElement;
+  private brandLink!: HTMLAnchorElement;
+  private audioEl!: HTMLAudioElement;
+
+  /**
+   * Identity token for the signed-in visitor (docs/integrations.md §2-3). Memory only: never stored.
+   * Read when a conversation starts, so a change applies to the next conversation, not a live one.
+   */
+  private identityToken: string | null = null;
+
+  /** Called by the loader before the element is attached. */
+  setup(key: string, api: string): void {
+    this.key = key;
+    this.api = api;
+  }
+
+  /** Sets (token) or forgets (null) the signed-in visitor for the next conversation. */
+  setIdentity(token: string | null): void {
+    this.identityToken = token;
+  }
+
+  connectedCallback(): void {
+    if (!this.built) this.build();
+    if (!this.configLoad) this.configLoad = this.loadConfig();
+  }
+
+  disconnectedCallback(): void {
+    void this.endSession(null);
+  }
+
+  // ---------------------------------------------------------------- public API
+
+  async open(): Promise<void> {
+    if (!this.built) this.build();
+    if (this.isOpen) return;
+    this.isOpen = true;
+    this.settleClose();
+    this.panel.hidden = false;
+    this.launcher.hidden = true;
+    this.launcher.setAttribute("aria-expanded", "true");
+    this.render();
+    this.focusIntoPanel();
+    if (!this.config) {
+      if (!this.configLoad) this.configLoad = this.loadConfig();
+      await this.configLoad;
+      if (this.isOpen) this.render();
+    }
+  }
+
+  close(): void {
+    if (!this.isOpen) return;
+    const hadFocus = this.shadowRoot?.activeElement != null;
+    this.isOpen = false;
+    // Play the exit animation, then hide. Inert at once, so nothing in it can be reached meanwhile.
+    this.panel.inert = true;
+    this.panel.classList.add("closing");
+    clearTimeout(this.closeTimer);
+    this.closeTimer = window.setTimeout(() => this.settleClose(), 200);
+    this.launcher.hidden = !this.config;
+    this.launcher.setAttribute("aria-expanded", "false");
+    // Closing the panel ends the conversation and releases the microphone.
+    void this.endSession("Conversation ended");
+    if (hadFocus && !this.launcher.hidden) this.launcher.focus();
+  }
+
+  /** Finishes (or cancels, when reopened) a pending close animation. */
+  private settleClose(): void {
+    clearTimeout(this.closeTimer);
+    this.panel.classList.remove("closing");
+    this.panel.inert = false;
+    if (!this.isOpen) this.panel.hidden = true;
+  }
+
+  // ---------------------------------------------------------------- config
+
+  private async loadConfig(): Promise<void> {
+    this.configError = null;
+    try {
+      const config = await fetchConfig(this.api, this.key);
+      this.config = config;
+      this.mode = config.modes.includes("voice") ? "voice" : config.modes[0]!;
+      this.applyTheme(config);
+      this.clearNotice();
+      this.launcher.hidden = this.isOpen;
+      if (config.livekitUrl) warmUpConnection(config.livekitUrl);
+    } catch (err) {
+      this.configError = toWidgetError(err);
+      this.launcher.hidden = true;
+      console.warn(`[Halochime] Could not load widget config (${this.configError.kind}): ${this.configError.message}`);
+    }
+    this.render();
+  }
+
+  private applyTheme(config: WidgetConfigResponse): void {
+    this.style.setProperty("--tf-accent", config.theme.color);
+    this.style.setProperty("--tf-on-accent", onAccent(config.theme.color));
+    this.rootEl.classList.toggle("left", config.theme.position === "bottom-left");
+    this.launcherLabel.textContent = config.theme.label;
+    this.launcher.title = config.theme.label;
+    this.setAttribute("data-appearance", config.theme.appearance ?? "light");
+    this.applyIcon(config);
+    this.titleEl.textContent = config.name;
+    this.titleEl.title = config.name;
+    this.panel.setAttribute("aria-label", `${config.name} chat`);
+    this.emptyGreeting.textContent = config.greeting;
+    this.emptyGreeting.hidden = !config.greeting;
+    this.applyPoweredBy(config.poweredBy);
+  }
+
+  /** The icon the business picked, or its own picture once that has loaded (the drawn icon stays if it fails). */
+  private applyIcon(config: WidgetConfigResponse): void {
+    const choice = config.theme.icon ?? "auto";
+    const shape: WidgetIconShape =
+      choice === "auto" || choice === "image" ? (config.modes.includes("voice") ? "wave" : "chat") : choice;
+    for (const orb of [this.launcherOrb, this.avatarEl]) {
+      orb.classList.remove("has-image");
+      orb.replaceChildren(icon(shapeIcon(shape)));
+      if (choice !== "image" || !config.iconUrl) continue;
+      const img = h("img", { alt: "", decoding: "async", draggable: "false" });
+      img.addEventListener("load", () => {
+        orb.classList.add("has-image");
+        orb.replaceChildren(img);
+      }, { once: true });
+      img.src = config.iconUrl;
+    }
+  }
+
+  /** "by Halochime" under the chat (only the name is a link), tagged with the site it came from. Hidden on our own site. */
+  private applyPoweredBy(poweredBy: WidgetConfigResponse["poweredBy"]): void {
+    let href: URL | null = null;
+    try {
+      if (poweredBy) href = new URL(poweredBy.url);
+    } catch {
+      href = null;
+    }
+    if (!poweredBy || !href || href.origin === location.origin) {
+      this.brandEl.hidden = true;
+      return;
+    }
+    href.searchParams.set("utm_source", location.hostname || "widget");
+    href.searchParams.set("utm_medium", "widget");
+    href.searchParams.set("utm_campaign", "powered_by");
+    this.brandLink.href = href.toString();
+    this.brandLink.textContent = poweredBy.label;
+    this.brandEl.hidden = false;
+  }
+
+  // ---------------------------------------------------------------- DOM
+
+  private build(): void {
+    this.built = true;
+    const shadow = this.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = STYLES;
+
+    this.launcherLabel = h("span", { class: "launcher-label" }, "Talk to us");
+    this.launcherOrb = h("span", { class: "orb-mini", "aria-hidden": "true" }, icon(ICON_WAVE));
+    this.launcher = h(
+      "button",
+      { type: "button", class: "launcher", "aria-expanded": "false", "aria-controls": "tf-panel", hidden: true },
+      this.launcherOrb,
+      this.launcherLabel,
+    );
+    this.launcher.addEventListener("click", () => void this.open());
+
+    // Header
+    this.titleEl = h("h2", { class: "title", id: "tf-title" }, "Support");
+    this.statusEl = h("div", { class: "status", "data-live": "idle" });
+    this.avatarEl = h("span", { class: "orb-mini avatar", "aria-hidden": "true" }, icon(ICON_WAVE));
+    const closeBtn = h("button", { type: "button", class: "icon-btn", "aria-label": "Close chat" }, icon(ICON_CLOSE));
+    closeBtn.addEventListener("click", () => this.close());
+    const header = h(
+      "div",
+      { class: "header" },
+      this.avatarEl,
+      h("div", { class: "header-text" }, this.titleEl, this.statusEl),
+      closeBtn,
+    );
+
+    // Notice (errors and info)
+    this.noticeText = h("div", { class: "notice-text" });
+    this.noticeBtn = h("button", { type: "button", class: "notice-btn", hidden: true });
+    this.noticeBtn.addEventListener("click", () => {
+      const action = this.noticeAction;
+      this.clearNotice();
+      action?.run();
+    });
+    this.noticeEl = h("div", { class: "notice", role: "alert", hidden: true }, this.noticeText, this.noticeBtn);
+
+    // Transcript
+    this.emptyGreeting = h("p", { class: "empty-greeting" });
+    this.emptyHint = h("p", { class: "empty-hint" });
+    this.emptyEl = h("li", { class: "empty" }, this.emptyGreeting, this.emptyHint);
+    this.log = h("ol", { class: "log", role: "log", "aria-live": "polite", "aria-label": "Conversation" }, this.emptyEl);
+
+    // Footer: mode switch + end
+    this.modeBtns = {
+      voice: h("button", { type: "button", class: "mode-btn", "aria-pressed": "false" }, "Talk"),
+      text: h("button", { type: "button", class: "mode-btn", "aria-pressed": "false" }, "Type"),
+    };
+    this.modeBtns.voice.addEventListener("click", () => void this.switchMode("voice"));
+    this.modeBtns.text.addEventListener("click", () => void this.switchMode("text"));
+    this.modesEl = h(
+      "div",
+      { class: "modes", role: "group", "aria-label": "How do you want to chat?" },
+      this.modeBtns.voice,
+      this.modeBtns.text,
+    );
+    this.endBtn = h("button", { type: "button", class: "end-btn", "aria-label": "End conversation", hidden: true }, "End");
+    this.endBtn.addEventListener("click", () => void this.endSession("Conversation ended"));
+    const topRow = h("div", { class: "footer-row" }, this.modesEl, this.endBtn);
+
+    // Voice controls
+    this.micBtn = h("button", { type: "button", class: "mic", "data-state": "idle", "aria-label": MIC_ARIA.idle });
+    this.micBtn.addEventListener("click", () => void this.onMicClick());
+    this.micLabel = h("div", { class: "mic-label", "aria-hidden": "true" }, MIC_LABEL.idle);
+    this.voiceEl = h("div", { class: "voice" }, this.micBtn, this.micLabel);
+
+    // Text controls
+    this.input = h("input", {
+      class: "input",
+      type: "text",
+      enterkeyhint: "send",
+      autocomplete: "off",
+      maxlength: MAX_MESSAGE_CHARS,
+      placeholder: "Type your message…",
+      "aria-label": "Message",
+    });
+    this.sendBtn = h("button", { type: "submit", class: "send", "aria-label": "Send message", disabled: true }, icon(ICON_SEND));
+    this.textForm = h("form", { class: "text", hidden: true }, this.input, this.sendBtn);
+    this.textForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.sendMessage();
+    });
+    this.input.addEventListener("input", () => {
+      this.sendBtn.disabled = !this.input.value.trim();
+      // Start connecting as soon as the visitor starts typing, so the agent is in the room on send.
+      // (Not during a voice call: typed text goes to that call.)
+      if (this.input.value.trim() && this.mode === "text" && !this.prewarmBlocked && !this.activeOrStarting("text")) {
+        void this.startSession("text");
+      }
+    });
+
+    this.brandLink = h("a", { target: "_blank", rel: "noopener" });
+    this.brandEl = h("div", { class: "brand", hidden: true }, "by ", this.brandLink);
+
+    const footer = h(
+      "div",
+      { class: "footer" },
+      topRow,
+      this.voiceEl,
+      this.textForm,
+      this.brandEl,
+    );
+
+    this.panel = h(
+      "section",
+      { class: "panel", id: "tf-panel", role: "dialog", "aria-modal": "false", "aria-labelledby": "tf-title", tabindex: "-1", hidden: true },
+      header,
+      this.noticeEl,
+      this.log,
+      footer,
+    );
+    this.panel.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        this.close();
+      }
+    });
+
+    this.audioEl = h("audio", { autoplay: true, hidden: true });
+    this.audioEl.setAttribute("playsinline", "");
+
+    this.rootEl = h("div", { class: "root" }, this.launcher, this.panel, this.audioEl);
+    shadow.append(style, this.rootEl);
+  }
+
+  private focusIntoPanel(): void {
+    // Never focus the text input on touch devices: it pops the on-screen keyboard.
+    if (!isTouchDevice() && this.config && this.mode === "text") this.input.focus();
+    else if (this.config && this.mode === "voice" && !isTouchDevice()) this.micBtn.focus();
+    else this.panel.focus();
+  }
+
+  /** Syncs the whole panel to the current state. Cheap; called after every change. */
+  private render(): void {
+    if (!this.built) return;
+    const config = this.config;
+    const ready = !!config;
+    const modes = config?.modes ?? [];
+
+    this.panel.dataset.mode = this.mode;
+
+    // Modes: show only what the config allows; hide the switch when there is one choice.
+    this.modesEl.hidden = modes.length < 2;
+    for (const m of ["voice", "text"] as const) {
+      this.modeBtns[m].hidden = !modes.includes(m);
+      this.modeBtns[m].setAttribute("aria-pressed", String(this.mode === m));
+    }
+    this.voiceEl.hidden = !ready || this.mode !== "voice";
+    // During a voice call the visitor can also type (emails and order numbers are easier typed).
+    const inVoiceCall = this.mode === "voice" && this.liveVoiceSession() !== null;
+    this.textForm.hidden = !ready || (this.mode !== "text" && !inVoiceCall);
+    this.input.placeholder = inVoiceCall ? "Or type here, e.g. your email…" : "Type your message…";
+    this.endBtn.hidden = !this.session && !this.starting;
+
+    // Empty state
+    this.emptyEl.hidden = this.conversationHasContent;
+    this.emptyHint.textContent = !ready
+      ? this.configError
+        ? ""
+        : "Loading…"
+      : this.mode === "voice"
+        ? "Tap the microphone and start talking."
+        : "Type a message to start.";
+
+    // Header status + mic state
+    const mic = this.micState();
+    this.micBtn.dataset.state = mic;
+    this.voiceEl.dataset.state = mic;
+    this.micBtn.setAttribute("aria-label", MIC_ARIA[mic]);
+    this.micBtn.disabled = mic === "connecting";
+    this.micBtn.replaceChildren(icon(mic === "muted" ? ICON_MIC_OFF : ICON_MIC));
+    this.micLabel.textContent = MIC_LABEL[mic];
+
+    const live = this.session && !this.starting;
+    const status = !ready
+      ? "idle"
+      : this.starting || (this.session && this.activity === "connecting")
+        ? "connecting"
+        : live
+          ? "live"
+          : "idle";
+    this.statusEl.dataset.live = status;
+    this.statusEl.textContent = !ready
+      ? ""
+      : status === "connecting"
+        ? "Connecting…"
+        : status === "live"
+          ? this.mode === "voice"
+            ? MIC_LABEL[mic].replace("…", "")
+            : this.activity === "thinking"
+              ? "Typing…"
+              : "Online"
+          : "We usually reply instantly";
+
+    this.setTyping(this.mode === "text" && !!live && this.activity === "thinking");
+
+    if (!ready && this.configError && this.isOpen) {
+      this.showError(this.configError, { label: "Try again", run: () => void this.retryConfig() });
+    }
+  }
+
+  private micState(): MicState {
+    if (this.starting?.mode === "voice") return "connecting";
+    const s = this.session;
+    if (!s || s.mode !== "voice") return "idle";
+    if (this.activity === "connecting") return "connecting";
+    if (s.muted) return "muted";
+    return this.activity;
+  }
+
+  private async retryConfig(): Promise<void> {
+    this.configLoad = this.loadConfig();
+    await this.configLoad;
+  }
+
+  // ---------------------------------------------------------------- notices
+
+  private showError(err: WidgetError, action?: NoticeAction | null): void {
+    let fallback: NoticeAction | null = action ?? null;
+    const canType = this.config?.modes.includes("text") && this.mode === "voice";
+    if (!fallback && canType && ["mic_denied", "mic_missing", "out_of_credit"].includes(err.kind)) {
+      fallback = { label: "Type instead", run: () => void this.switchMode("text") };
+    }
+    if (!fallback && ["network", "agent_unavailable", "unknown"].includes(err.kind) && this.config) {
+      const mode = this.mode;
+      fallback = { label: "Try again", run: () => void this.startSession(mode) };
+    }
+    this.showNotice(errorText(err.kind), fallback, false);
+  }
+
+  private showNotice(text: string, action: NoticeAction | null, info: boolean): void {
+    this.noticeEl.classList.toggle("info", info);
+    this.noticeEl.setAttribute("role", info ? "status" : "alert");
+    this.noticeText.textContent = text;
+    this.noticeAction = action;
+    this.noticeBtn.hidden = !action;
+    this.noticeBtn.textContent = action?.label ?? "";
+    this.noticeEl.hidden = false;
+  }
+
+  private clearNotice(): void {
+    this.noticeEl.hidden = true;
+    this.noticeAction = null;
+  }
+
+  // ---------------------------------------------------------------- transcript
+
+  private nearBottom(): boolean {
+    const l = this.log;
+    return l.scrollHeight - l.scrollTop - l.clientHeight < 80;
+  }
+
+  private scrollToEnd(force: boolean): void {
+    if (force || this.nearBottom()) this.log.scrollTop = this.log.scrollHeight;
+  }
+
+  private addItem(li: HTMLLIElement, force = true): void {
+    const stick = force || this.nearBottom();
+    this.conversationHasContent = true;
+    this.emptyEl.hidden = true;
+    if (this.typingEl && this.typingEl.isConnected) this.log.insertBefore(li, this.typingEl);
+    else this.log.append(li);
+    if (stick) this.log.scrollTop = this.log.scrollHeight;
+  }
+
+  private addBubble(speaker: "visitor" | "agent", text: string): HTMLLIElement {
+    const label = h("span", { class: "sr-only" }, speaker === "visitor" ? "You: " : `${this.config?.name ?? "Agent"}: `);
+    // Agent replies get light formatting (bold, code, links, bullets); visitor text stays as typed.
+    const body = speaker === "agent" ? h("span", { class: "body" }) : null;
+    if (body) renderRich(body, text);
+    const li = h("li", { class: `msg ${speaker}` }, label, body ?? text);
+    this.addItem(li);
+    return li;
+  }
+
+  private addDivider(text: string): void {
+    if (!this.conversationHasContent) return;
+    const last = this.log.lastElementChild;
+    if (last?.classList.contains("divider") && last.textContent === text) return;
+    this.addItem(h("li", { class: "divider" }, text));
+  }
+
+  /**
+   * Live captions. Speech to text sends a visitor's turn as several segments (one per short pause),
+   * so everything the visitor says until the agent answers goes into one bubble. Agent replies keep
+   * one bubble per segment, updated in place until final.
+   */
+  private upsertSegment(seg: Segment): void {
+    const wasNear = this.nearBottom();
+    if (seg.speaker === "visitor") {
+      const live = isLiveCaption(seg.id);
+      const turn = live ? this.liveCaptionTurn(seg.id) : this.transcriptTurn(seg.id, seg.text);
+      if (!turn) return;
+      if (live) {
+        turn.texts.set(LIVE_CAPTION_ID, seg.text);
+      } else {
+        turn.texts.delete(LIVE_CAPTION_ID);
+        turn.pending.delete(LIVE_CAPTION_ID);
+        turn.texts.set(seg.id, seg.text);
+        this.segmentTurns.set(seg.id, turn);
+      }
+      const key = live ? LIVE_CAPTION_ID : seg.id;
+      if (seg.final) turn.pending.delete(key);
+      else turn.pending.add(key);
+      this.renderVisitorTurn(turn);
+      this.scrollToEnd(wasNear);
+      return;
+    }
+    this.visitorTurn = null;
+    let li = this.bubbles.get(seg.id);
+    if (!li) {
+      li = this.addBubble(seg.speaker, seg.text);
+      this.bubbles.set(seg.id, li);
+    } else if (seg.speaker === "agent") {
+      renderRich(li.lastChild as HTMLElement, seg.text);
+    } else {
+      li.lastChild!.textContent = seg.text;
+    }
+    li.classList.toggle("interim", !seg.final);
+    li.setAttribute("aria-busy", String(!seg.final));
+    if (seg.final) this.bubbles.delete(seg.id);
+    this.scrollToEnd(wasNear);
+  }
+
+  /** The open visitor bubble at the end of the log, if the visitor is the last one talking. */
+  private openVisitorTurn(): VisitorTurn | null {
+    const turn = this.visitorTurn;
+    // The typing dots always sit at the end of the log, so look at the item before them.
+    const last = this.typingEl?.isConnected ? this.typingEl.previousElementSibling : this.log.lastElementChild;
+    return turn && last === turn.li ? turn : null;
+  }
+
+  private newVisitorTurn(): VisitorTurn {
+    const turn: VisitorTurn = { li: this.addBubble("visitor", ""), texts: new Map(), pending: new Set(), startedAt: Date.now() };
+    this.visitorTurn = turn;
+    return turn;
+  }
+
+  /**
+   * Live words of one visitor turn: that turn's bubble, or a new one that waits for the real
+   * transcript. Once the transcript is in, later live words of the same turn are not needed.
+   */
+  private liveCaptionTurn(id: string): VisitorTurn | null {
+    const known = this.segmentTurns.get(id);
+    if (known) return known.li.isConnected && !hasTranscript(known) ? known : null;
+    const turn = this.newVisitorTurn();
+    this.awaitingTranscript.push(turn);
+    this.segmentTurns.set(id, turn);
+    return turn;
+  }
+
+  /**
+   * A real transcript: its earlier bubble, else the waiting bubble whose live words it matches
+   * (oldest first when none match clearly), else the open one.
+   */
+  private transcriptTurn(id: string, text: string): VisitorTurn {
+    const known = this.segmentTurns.get(id);
+    if (known?.li.isConnected) return known;
+    const now = Date.now();
+    this.awaitingTranscript = this.awaitingTranscript.filter((turn) => {
+      if (!turn.li.isConnected) return false;
+      if (now - turn.startedAt <= TRANSCRIPT_WAIT_MS) return true;
+      // Gave up waiting: the live words stay as they are.
+      turn.pending.clear();
+      this.renderVisitorTurn(turn);
+      return false;
+    });
+    if (this.awaitingTranscript.length) {
+      let best = 0;
+      let bestScore = 0;
+      this.awaitingTranscript.forEach((turn, i) => {
+        const score = wordOverlap(turn.texts.get(LIVE_CAPTION_ID) ?? "", text);
+        if (score > bestScore) [best, bestScore] = [i, score];
+      });
+      if (bestScore < MATCH_MIN_OVERLAP) best = 0;
+      // Waiting bubbles before the match got no transcript of their own: keep their live words.
+      for (const skipped of this.awaitingTranscript.splice(0, best)) {
+        skipped.pending.clear();
+        this.renderVisitorTurn(skipped);
+      }
+      return this.awaitingTranscript.shift()!;
+    }
+    return this.openVisitorTurn() ?? this.newVisitorTurn();
+  }
+
+  private renderVisitorTurn(turn: VisitorTurn): void {
+    const text = [...turn.texts.values()].map((t) => t.trim()).filter(Boolean).join(" ");
+    turn.li.lastChild!.textContent = text;
+    turn.li.classList.toggle("interim", turn.pending.size > 0);
+    turn.li.setAttribute("aria-busy", String(turn.pending.size > 0));
+  }
+
+  private dropSegment(id: string): void {
+    const turn = this.segmentTurns.get(id) ?? (this.visitorTurn?.texts.has(id) ? this.visitorTurn : null);
+    if (turn?.texts.has(id)) {
+      turn.texts.delete(id);
+      turn.pending.delete(id);
+      this.segmentTurns.delete(id);
+      if (turn.texts.size === 0) {
+        turn.li.remove();
+        if (this.visitorTurn === turn) this.visitorTurn = null;
+      } else {
+        this.renderVisitorTurn(turn);
+      }
+      return;
+    }
+    this.bubbles.get(id)?.remove();
+    this.bubbles.delete(id);
+  }
+
+  /** The conversation is over: nothing more will arrive for the visitor bubbles. */
+  private resetVisitorTurns(): void {
+    for (const turn of new Set([...this.awaitingTranscript, ...this.segmentTurns.values(), ...(this.visitorTurn ? [this.visitorTurn] : [])])) {
+      turn.pending.clear();
+      if (turn.li.isConnected) this.renderVisitorTurn(turn);
+    }
+    this.awaitingTranscript = [];
+    this.segmentTurns.clear();
+    this.visitorTurn = null;
+  }
+
+  private setTyping(on: boolean): void {
+    if (on && !this.typingEl) {
+      this.typingEl = h("li", { class: "msg agent typing", "aria-label": "Agent is typing" }, h("span"), h("span"), h("span"));
+      this.log.append(this.typingEl);
+      this.scrollToEnd(false);
+    } else if (!on && this.typingEl) {
+      this.typingEl.remove();
+      this.typingEl = null;
+    }
+  }
+
+  // ---------------------------------------------------------------- sessions
+
+  private liveVoiceSession(): Session | null {
+    const s = this.session;
+    return s && s.mode === "voice" && !s.isClosed && !this.starting ? s : null;
+  }
+
+  private activeOrStarting(mode: ConversationMode): boolean {
+    return this.starting?.mode === mode || (!!this.session && this.session.mode === mode);
+  }
+
+  /** Starts (or joins an in-flight start of) a session in `mode`. Resolves null on failure/cancel. */
+  private startSession(mode: ConversationMode): Promise<Session | null> {
+    if (this.session && this.session.mode === mode && !this.session.isClosed && !this.starting) {
+      return Promise.resolve(this.session);
+    }
+    if (this.starting?.mode === mode) return this.starting.promise;
+    // Ending is synchronous up to its first await, so state is clean before the new attempt.
+    if (this.session || this.starting) void this.endSession(null);
+    const attempt: StartAttempt = { mode, promise: Promise.resolve(null) };
+    this.starting = attempt;
+    attempt.promise = this.doStart(attempt);
+    this.render();
+    return attempt.promise;
+  }
+
+  private async doStart(attempt: StartAttempt): Promise<Session | null> {
+    const config = this.config;
+    const { mode } = attempt;
+    const isCurrent = () => this.starting === attempt;
+    if (!config) return null;
+    this.clearNotice();
+    this.activity = "connecting";
+
+    let session: Session | null = null;
+    try {
+      // Voice: ask for the microphone before creating the conversation, so a "no" costs nothing.
+      const mic = mode === "voice" ? await openMicrophone() : null;
+      if (!isCurrent()) {
+        mic?.stop();
+        return null;
+      }
+      session = new Session(mode, this.audioEl, this.sessionEvents(() => session), mic);
+      this.session = session;
+      const info = await createSession(this.api, {
+        key: this.key,
+        mode,
+        visitorId: getVisitorId(),
+        ...(this.identityToken ? { identityToken: this.identityToken } : {}),
+        page: pageInfo(),
+      });
+      if (!isCurrent()) {
+        await session.end();
+        return null;
+      }
+      await session.start(info);
+      if (!isCurrent() || session.isClosed) {
+        await session.end();
+        return null;
+      }
+      this.starting = null;
+      this.prewarmBlocked = false;
+      this.render();
+      return session;
+    } catch (err) {
+      if (session) await session.end();
+      if (!isCurrent()) return null;
+      if (this.session === session) this.session = null;
+      this.starting = null;
+      this.prewarmBlocked = true;
+      const e = toWidgetError(err);
+      // A failed room connect (bad URL, firewall) reads as a network problem to the visitor.
+      this.showError(e.kind === "unknown" && session ? new WidgetError("network", e.message) : e);
+      this.render();
+      return null;
+    }
+  }
+
+  /** Callbacks for one session; anything from a session that is no longer current is ignored. */
+  private sessionEvents(getSession: () => Session | null): SessionEvents {
+    const isMine = () => {
+      const s = getSession();
+      return s !== null && this.session === s;
+    };
+    return {
+      activity: (state) => {
+        if (!isMine()) return;
+        this.activity = state;
+        this.render();
+      },
+      segment: (seg) => {
+        if (!isMine()) return;
+        if (seg.speaker === "agent") this.setTyping(false);
+        this.upsertSegment(seg);
+      },
+      dropSegment: (id) => {
+        if (isMine()) this.dropSegment(id);
+      },
+      audioBlocked: (blocked) => {
+        if (!isMine()) return;
+        if (blocked) {
+          this.showNotice(
+            "Your browser paused the sound.",
+            { label: "Turn on sound", run: () => void getSession()?.resumeAudio().catch(() => undefined) },
+            true,
+          );
+        } else if (this.noticeAction?.label === "Turn on sound") {
+          this.clearNotice();
+        }
+      },
+      ended: (reason) => {
+        if (!isMine()) return;
+        this.session = null;
+        this.starting = null;
+        this.setTyping(false);
+        this.bubbles.clear();
+        this.resetVisitorTurns();
+        this.addDivider("Conversation ended");
+        if (reason === "connection_lost") this.showError(new WidgetError("network"));
+        this.render();
+      },
+    };
+  }
+
+  /** Ends whatever is running. `divider` is shown in the transcript when something actually ended. */
+  private async endSession(divider: string | null): Promise<void> {
+    const session = this.session;
+    const wasStarting = !!this.starting;
+    this.session = null;
+    this.starting = null;
+    this.activity = "connecting";
+    this.setTyping(false);
+    for (const li of this.bubbles.values()) li.classList.remove("interim");
+    this.bubbles.clear();
+    this.resetVisitorTurns();
+    if ((session || wasStarting) && divider) this.addDivider(divider);
+    this.render();
+    if (session) await session.end();
+  }
+
+  private async switchMode(mode: ConversationMode): Promise<void> {
+    if (!this.config?.modes.includes(mode)) return;
+    if (mode === this.mode) return;
+    const wasRunning = !!this.session || !!this.starting;
+    this.mode = mode;
+    this.clearNotice();
+    if (wasRunning) {
+      await this.endSession(mode === "voice" ? "Switched to talking" : "Switched to typing");
+      void this.startSession(mode);
+    } else {
+      this.render();
+    }
+    if (mode === "text" && !isTouchDevice()) this.input.focus();
+    else if (mode === "voice") this.micBtn.focus();
+  }
+
+  private async onMicClick(): Promise<void> {
+    const s = this.session;
+    if (this.starting) return;
+    if (!s || s.mode !== "voice") {
+      await this.startSession("voice");
+      return;
+    }
+    try {
+      await s.setMuted(!s.muted);
+    } catch (err) {
+      const e = toWidgetError(err);
+      this.showError(e.kind === "unknown" ? new WidgetError("mic_denied", e.message) : e);
+    }
+    this.render();
+  }
+
+  private async sendMessage(): Promise<void> {
+    const text = this.input.value.trim().slice(0, MAX_MESSAGE_CHARS);
+    if (!text || !this.config) return;
+    this.input.value = "";
+    this.sendBtn.disabled = true;
+    this.clearNotice();
+    // A text chat starts with this message, so the agent doesn't say its greeting; show it here, above it.
+    if (this.mode === "text" && !this.conversationHasContent && this.config.greeting) {
+      this.addBubble("agent", this.config.greeting);
+    }
+    const bubble = this.addBubble("visitor", text);
+
+    const session = this.mode === "voice" ? this.liveVoiceSession() : await this.startSession("text");
+    if (!session) {
+      bubble.classList.add("interim");
+      return;
+    }
+    try {
+      await session.sendText(text);
+    } catch (err) {
+      bubble.classList.add("interim");
+      const e = toWidgetError(err);
+      this.showError(e.kind === "unknown" ? new WidgetError("network", e.message) : e);
+    }
+  }
+}

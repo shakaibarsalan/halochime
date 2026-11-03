@@ -1,0 +1,30 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: talkfront
+      POSTGRES_PASSWORD: talkfront
+      POSTGRES_DB: talkfront
+    ports:
+      - "5544:5432"
+    volumes:
+      - talkfront-db:/var/lib/postgresql/data
+
+  # Semantic search: embeds knowledge chunks in the background and query text on request.
+  # Agent: EMBEDDER_URL=http://127.0.0.1:8090 in apps/agent/.env
+  embedder:
+    build: ./apps/embedder
+    image: talkfront-embedder:dev
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://talkfront:talkfront@db:5432/talkfront
+    ports:
+      - "127.0.0.1:8090:8090"
+    mem_limit: 1g
+    cpus: 0.5
+
+volumes:
+  talkfront-db:

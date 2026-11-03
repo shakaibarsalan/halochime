@@ -1,0 +1,1 @@
+ALTER TABLE "agents" ALTER COLUMN "llm_model" SET DEFAULT 'openai/gpt-oss-20b';

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Northwind Plumbing (Halochime demo)</title>
+    <style>
+      /* Deliberately loud host styles: none of this should reach the widget, and none of the
+         widget's styles should reach this page. */
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 18px/1.6 Georgia, "Times New Roman", serif; color: #2b2118; background: #fbf7f1; }
+      button { font: 700 20px/1 Impact, sans-serif; background: hotpink; color: #000; border: 4px dashed #000; padding: 12px; }
+      h1, h2 { font-family: Impact, sans-serif; letter-spacing: 0.02em; }
+      header { background: #1e3a5f; color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+      header nav a { color: #fff; margin-left: 18px; }
+      main { max-width: 860px; margin: 0 auto; padding: 24px; }
+      .hero { padding: 48px 0 24px; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+      .card { background: #fff; border: 1px solid #e3d8c8; border-radius: 6px; padding: 16px; }
+      footer { padding: 32px 24px 120px; text-align: center; color: #7a6a58; }
+      .tf-controls { display: flex; flex-wrap: wrap; gap: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Northwind Plumbing</strong>
+      <nav><a href="#services">Services</a><a href="#hours">Hours</a><a href="#contact">Contact</a></nav>
+    </header>
+    <main>
+      <section class="hero">
+        <h1>Leaks fixed today, not next week.</h1>
+        <p>
+          Family-run plumbers serving the city since 1998. Emergency call-outs 24/7, fixed prices,
+          and a two-year guarantee on every repair.
+        </p>
+        <div class="tf-controls">
+          <button type="button" onclick="window.Talkfront && window.Talkfront.open()">Open assistant</button>
+          <button type="button" onclick="window.Talkfront && window.Talkfront.close()">Close assistant</button>
+        </div>
+      </section>
+      <section id="services">
+        <h2>Services</h2>
+        <div class="cards">
+          <div class="card"><h3>Emergency repairs</h3><p>Burst pipes, blocked drains, no hot water. Call-out fee $89.</p></div>
+          <div class="card"><h3>Boiler service</h3><p>Annual service $120, includes a safety certificate.</p></div>
+          <div class="card"><h3>Bathrooms</h3><p>Full fit-outs with a free quote within 48 hours.</p></div>
+        </div>
+      </section>
+      <section id="hours">
+        <h2>Hours</h2>
+        <p>Office: Monday to Saturday, 8am to 6pm. Emergencies: any time.</p>
+      </section>
+      <section id="contact">
+        <h2>Contact</h2>
+        <p>Call 555-0134 or use the assistant in the corner.</p>
+      </section>
+    </main>
+    <footer>Northwind Plumbing is a made-up business for testing the Halochime widget.</footer>
+
+    <!--
+      Halochime embed. Replace pk_REPLACE_ME with a publishable key from the dashboard.
+      Serve this page from a local web server (http://localhost:xxxx), not file://, so the
+      origin check and microphone access work, e.g.:  npx serve packages/widget  (any static server)
+      Build the widget first: npm run build -w @talkfront/widget  (or run the web app with npm run dev).
+    -->
+    <script src="http://localhost:3000/widget.js" data-key="pk_REPLACE_ME" data-api="http://localhost:3000" async></script>
+  </body>
+</html>

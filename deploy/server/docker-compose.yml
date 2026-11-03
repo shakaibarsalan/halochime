@@ -1,0 +1,88 @@
+# Talkfront on a single Linux server: Postgres, the voice agent worker and the embedder.
+# The web app runs on Vercel and reaches this database over TLS on port 5544.
+# All containers are capped so they never starve other projects on the same machine.
+name: talkfront
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: talkfront-db
+    restart: unless-stopped
+    env_file: ./db.env
+    environment:
+      POSTGRES_USER: talkfront_admin
+      POSTGRES_DB: talkfront
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+      - -c
+      - hba_file=/etc/talkfront/pg_hba.conf
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - max_connections=60
+      - -c
+      - shared_buffers=256MB
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./certs:/certs:ro
+      - ./pg_hba.conf:/etc/talkfront/pg_hba.conf:ro
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "0.0.0.0:5544:5432"
+    mem_limit: 1g
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U talkfront_admin -d talkfront"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  agent:
+    build: ./agent
+    image: talkfront-agent:latest
+    container_name: talkfront-agent
+    restart: unless-stopped
+    env_file: ./agent.env
+    environment:
+      # Query embeddings for semantic knowledge search. If the embedder is down, search falls back to text.
+      EMBEDDER_URL: http://embedder:8090
+      # Ready-made greeting audio, kept across rebuilds so calls start talking at once.
+      GREETING_CACHE_DIR: /home/agent/cache/greetings
+    volumes:
+      - agent-cache:/home/agent/cache
+    mem_limit: 3g
+    cpus: 1.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # Embeds knowledge chunks (background loop) and visitors' questions (for the agent).
+  # No published port: only containers on this compose network can reach it.
+  embedder:
+    build: ./embedder
+    image: talkfront-embedder:latest
+    container_name: talkfront-embedder
+    restart: unless-stopped
+    env_file: ./embedder.env
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  db-data:
+  agent-cache:

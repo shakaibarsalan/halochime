@@ -1,0 +1,36 @@
+node_modules/
+.next/
+dist/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# env files: only the .example files are committed
+.env
+.env.*
+!.env.example
+
+# python agent
+apps/agent/.venv/
+__pycache__/
+*.pyc
+
+# built widget copied into the web app
+apps/web/public/widget.js
+apps/web/public/widget.js.map
+
+# local tools
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+.claude/
+.vercel/
+
+# private local notes (e.g. the Beekeeper read-only DB connection)
+*.local.txt
+
+# dev emails written by apps/web/src/lib/email (instead of sending)
+.outbox/
