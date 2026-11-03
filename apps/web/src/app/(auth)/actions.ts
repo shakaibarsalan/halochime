@@ -78,3 +78,57 @@ export async function sendCode(email: string, purpose: "verify" | "reset"): Prom
   }
   return { ok: true, cooldownSec: RESEND_COOLDOWN_SEC };
 }
+
+export type VerifyCodeResult = { ok: true } | { ok: false; code?: string; status?: number; message?: string };
+
+const VerifyInput = z.object({
+  email: z.string().trim().toLowerCase().max(320).pipe(z.email()),
+  otp: z.string().trim().regex(/^\d{6}$/),
+  password: z.string().min(1).max(128),
+});
+
+const WRONG_PASSWORD = "That doesn't match the password for this email. Go back and enter it again.";
+
+/**
+ * Verifies a sign-up (or unverified sign-in) code, but only for the person who chose the account's
+ * password. Better Auth checks the code by address alone, and a stranger may have signed up again with
+ * the same address since (that replaces an unverified account), so the code must not verify, and sign
+ * the owner into, an account whose password someone else set. The browser can't call Better Auth's
+ * verify endpoint directly (lib/auth.ts DISABLED_PATHS).
+ */
+export async function verifyEmailCode(email: string, otp: string, password: string): Promise<VerifyCodeResult> {
+  const parsed = VerifyInput.safeParse({ email, otp, password });
+  if (!parsed.success) return { ok: false, code: "INVALID_OTP" };
+  const { email: address } = parsed.data;
+
+  const blocked = [
+    rateLimit(`verify:ip:${await clientIp()}`, 20, 10 * 60 * 1000),
+    rateLimit(`verify:email:${address}`, 10, 10 * 60 * 1000),
+  ].find((l) => !l.ok);
+  if (blocked) return { ok: false, status: 429 };
+
+  const auth = getAuth();
+  const ctx = await auth.$context;
+  const found = await ctx.internalAdapter.findUserByEmail(address, { includeAccounts: true });
+  const hash = found?.accounts.find((a) => a.providerId === "credential")?.password;
+  // Already verified (or no such account): nothing to verify here; they sign in normally.
+  if (!found || found.user.emailVerified || !hash) return { ok: false, code: "INVALID_OTP" };
+  if (!(await ctx.password.verify({ hash, password: parsed.data.password }))) {
+    return { ok: false, message: WRONG_PASSWORD };
+  }
+
+  let result: Awaited<ReturnType<typeof auth.api.verifyEmailOTP>>;
+  try {
+    result = await auth.api.verifyEmailOTP({ body: { email: address, otp: parsed.data.otp }, headers: await headers() });
+  } catch (err) {
+    const e = err as { body?: { code?: string; message?: string }; statusCode?: number };
+    return { ok: false, code: e.body?.code, message: e.body?.message, status: e.statusCode };
+  }
+  // The account was replaced between the password check and the code check: undo the sign-in.
+  if (result.user.id !== found.user.id) {
+    if (result.token) await ctx.internalAdapter.deleteSession(result.token);
+    await ctx.internalAdapter.updateUser(result.user.id, { emailVerified: false });
+    return { ok: false, message: WRONG_PASSWORD };
+  }
+  return { ok: true };
+}

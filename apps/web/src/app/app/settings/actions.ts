@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -53,6 +53,9 @@ function authMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+const INVITES_PER_USER_PER_DAY = 20;
+const INVITES_PER_WORKSPACE_PER_DAY = 30;
+
 const InviteInput = z.object({
   email: z.string().trim().toLowerCase().max(320).pipe(z.email("Enter a valid email address.")),
   role: z.enum(["admin", "member"], { error: "Choose Admin or Member." }),
@@ -65,6 +68,17 @@ export async function createInvite(_prev: InviteState, formData: FormData): Prom
   const typed = String(formData.get("email") ?? "").slice(0, 320);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the form.", email: typed };
   if (parsed.data.email === ws.user.email.toLowerCase()) return { error: "You're already in this workspace.", email: typed };
+
+  // Every invite is an email from our shared sender, so cap them (counted in the database, so the
+  // limit holds across server instances; re-invites count too).
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [sentByUser, sentByWorkspace] = await Promise.all([
+    db.$count(invitation, and(eq(invitation.inviterId, ws.user.id), gt(invitation.createdAt, dayAgo))),
+    db.$count(invitation, and(eq(invitation.organizationId, ws.organizationId), gt(invitation.createdAt, dayAgo))),
+  ]);
+  if (sentByUser >= INVITES_PER_USER_PER_DAY || sentByWorkspace >= INVITES_PER_WORKSPACE_PER_DAY) {
+    return { error: "That's the most invites for today. You can send more tomorrow.", email: typed };
+  }
 
   try {
     const h = await headers();

@@ -105,20 +105,27 @@ export function Toggle({
   defaultChecked,
   label,
   hint,
+  disabled,
 }: {
   name: string;
   value?: string;
   defaultChecked: boolean;
   label: string;
   hint?: ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <label className="group flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 transition-colors hover:border-slate-300 has-[:checked]:border-brand-200 has-[:checked]:bg-brand-50/40">
+    <label
+      className={cx(
+        "group flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 transition-colors has-[:checked]:border-brand-200 has-[:checked]:bg-brand-50/40",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-slate-300",
+      )}
+    >
       <span className="min-w-0">
         <span className="block text-sm font-medium text-slate-900">{label}</span>
         {hint ? <span className="mt-0.5 block text-xs leading-5 text-slate-500">{hint}</span> : null}
       </span>
-      <input type="checkbox" name={name} value={value} defaultChecked={defaultChecked} className="peer sr-only" />
+      <input type="checkbox" name={name} value={value} defaultChecked={defaultChecked} disabled={disabled} className="peer sr-only" />
       <span
         aria-hidden
         className="relative mt-0.5 h-5 w-9 shrink-0 rounded-full bg-slate-200 transition-colors peer-checked:bg-brand-600 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-600 after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:after:translate-x-4"

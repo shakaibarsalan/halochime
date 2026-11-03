@@ -36,6 +36,13 @@
       "when": 1793702388212,
       "tag": "0004_agent_images",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793724061141,
+      "tag": "0005_minute_requests",
+      "breakpoints": true
     }
   ]
 }

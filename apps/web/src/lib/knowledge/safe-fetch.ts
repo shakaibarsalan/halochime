@@ -19,8 +19,10 @@ for (const [net, prefix] of [
 ] as const) blocked.addSubnet(net, prefix, "ipv4");
 // No ::ffff:0:0/96 rule: Node's BlockList already checks IPv4-mapped IPv6 addresses against the IPv4
 // rules above, and a mapped-range rule would match every IPv4 address.
+// ::/96 is the old IPv4-compatible range (e.g. ::7f00:1 = 127.0.0.1); it also covers :: and ::1.
+// Unlike ::ffff:0:0/96 it does not match plain IPv4 addresses (checked against Node 24's BlockList).
 for (const [net, prefix] of [
-  ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["100::", 64],
+  ["::", 96], ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["100::", 64],
   ["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
 ] as const) blocked.addSubnet(net, prefix, "ipv6");
 

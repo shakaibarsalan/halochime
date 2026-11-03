@@ -81,7 +81,7 @@ can be regenerated or removed; owners and admins only). Never sign in the browse
 import jwt from "jsonwebtoken";
 const token = jwt.sign(
   { sub: user.id, name: user.name, email: user.email, attributes: { plan: "pro", open_orders: 2 } },
-  process.env.TALKFRONT_IDENTITY_SECRET,
+  process.env.HALOCHIME_IDENTITY_SECRET,
   { algorithm: "HS256", expiresIn: "1h" },
 );
 ```

@@ -25,13 +25,20 @@ import { Logo } from "@/components/logo";
 import { cx } from "@/components/ui";
 import { TRIAL_SECONDS } from "@/db/schema";
 import { appUrl } from "@/lib/env";
+import { LEGAL_LINKS, OG_IMAGE } from "@/lib/site";
 
 const TRIAL_MIN = TRIAL_SECONDS / 60;
 
+const TITLE = "Halochime: a voice AI agent for your website";
+const DESCRIPTION =
+  "Visitors ask out loud or type. Halochime answers from your own knowledge and takes a message when your team should follow up. Add it with one script tag.";
+
 export const metadata: Metadata = {
-  title: { absolute: "Halochime: a voice AI agent for your website" },
-  description:
-    "Visitors ask out loud or type. Halochime answers from your own knowledge and takes a message when your team should follow up. Add it with one script tag.",
+  title: { absolute: TITLE },
+  description: DESCRIPTION,
+  alternates: { canonical: "/" },
+  openGraph: { type: "website", siteName: "Halochime", url: "/", title: TITLE, description: DESCRIPTION, images: [OG_IMAGE] },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
 };
 
 export const viewport: Viewport = { themeColor: "#07070c", colorScheme: "dark" };
@@ -68,7 +75,7 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: "How is voice billed?",
-    a: `Voice uses prepaid minutes, rounded up per started minute. New workspaces start with ${TRIAL_MIN} free minutes and no card. Text chats are free during the beta.`,
+    a: `Voice uses prepaid minutes, rounded up per started minute. The first workspace you create comes with ${TRIAL_MIN} free minutes and no card; workspaces you add after that start at zero. Text chats are free during the beta.`,
   },
   {
     q: "Can I control where the widget appears?",
@@ -507,7 +514,17 @@ export default function LandingPage() {
             </Link>
           </nav>
         </div>
-        <p className="pb-8 text-center text-xs text-white/50">© {year} Halochime</p>
+        {/* Centred, so the demo widget's launcher in the corner never covers these links. */}
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-4 pb-8 sm:px-6">
+          <nav aria-label="Legal" className="flex flex-wrap justify-center gap-x-4 gap-y-1">
+            {LEGAL_LINKS.map((l) => (
+              <Link key={l.href} href={l.href} className={cx("rounded text-xs text-white/55 transition-colors hover:text-white", lpFocus)}>
+                {l.label}
+              </Link>
+            ))}
+          </nav>
+          <p className="text-xs text-white/50">© {year} Halochime</p>
+        </div>
       </footer>
     </div>
   );

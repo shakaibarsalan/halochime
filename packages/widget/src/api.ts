@@ -70,7 +70,9 @@ function errorFromResponse(status: number, body: unknown): WidgetError {
 async function request<T>(url: string, init: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { ...init, mode: "cors", credentials: "omit", cache: "no-store" });
+    // "same-origin": only on Halochime's own pages (the dashboard's test widget) is the sign-in cookie
+    // sent, which draft agents need; embeds on a business's site never send any cookie.
+    res = await fetch(url, { ...init, mode: "cors", credentials: "same-origin", cache: "no-store" });
   } catch (err) {
     throw new WidgetError("network", err instanceof Error ? err.message : "fetch failed");
   }

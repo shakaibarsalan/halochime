@@ -901,7 +901,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     joined_at = time.time()
     try:
-        await session.start(agent=agent, room=ctx.room, room_options=room_options_for(runtime.mode))
+        # record=False: LiveKit Cloud keeps no audio, transcripts or traces of calls, whatever the project
+        # setting says (the Privacy Policy promises we don't record call audio).
+        await session.start(agent=agent, room=ctx.room, room_options=room_options_for(runtime.mode), record=False)
     except Exception:
         logger.exception("session failed to start")
         end_reason.set("error")

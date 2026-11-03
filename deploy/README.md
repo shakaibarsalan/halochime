@@ -97,6 +97,49 @@ ssh -f -N -L 15544:127.0.0.1:5544 ubuntu@SERVER
 cd apps/web && DATABASE_URL="postgres://talkfront_app:<APP_DB_PASSWORD>@127.0.0.1:15544/talkfront?sslmode=require" npx drizzle-kit migrate
 ```
 
+## Backups
+
+`server/backup.sh` runs on the server every night at 04:30 UTC (cron, log in `~/talkfront/backup.log`). It
+dumps the database (`pg_dump -Fc`), adds the server config that is not in git (`*.env`, compose file,
+`pg_hba.conf`, TLS certs), encrypts the bundle with AES-256 and commits it to the private repo
+`halochime-backups` with a deploy key that can write only to that repo. Each run replaces the repo's history
+with one commit of the last 30 days (the Privacy Policy promises 30). The passphrase is `~/.halochime-backup-pass` on the
+server, with a copy as `HALOCHIME_BACKUP_PASS` in the git-ignored `deploy/.env.production`.
+
+Restore (into a new database first, then switch only once it checks out):
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -in halochime-<stamp>.tar.gz.enc -out bundle.tgz -pass env:HALOCHIME_BACKUP_PASS
+tar xzf bundle.tgz            # talkfront.dump + config/
+docker exec talkfront-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -h 127.0.0.1 -d postgres -c "create database restore_check"'
+docker exec -i talkfront-db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -h 127.0.0.1 -d restore_check --no-owner' < talkfront.dump
+```
+
+Tested 3 Nov 2026: a restored copy matched the live database row for row.
+
+## Credit minutes after payment
+
+There is no payment provider. An owner or admin asks for minutes on the Billing page; the request is
+emailed to `SUPPORT_EMAIL` (Vercel env; falls back to the address in `EMAIL_FROM`) with Reply-To set to
+the customer. Reply with the Payoneer link. Once it is paid, add the minutes from the developer machine:
+
+```bash
+ssh -f -N -L 15544:127.0.0.1:5544 ubuntu@SERVER
+cd apps/web
+export DATABASE_URL="postgres://talkfront_app:<APP_DB_PASSWORD>@127.0.0.1:15544/talkfront?sslmode=require"
+export NEXT_PUBLIC_APP_URL=https://halochime.vercel.app EMAIL_DEV_SEND=1
+npx tsx --conditions=react-server --env-file=.env.local scripts/credit-minutes.ts <workspace id> 300 "Payoneer 3 Nov" --dry-run
+npx tsx --conditions=react-server --env-file=.env.local scripts/credit-minutes.ts <workspace id> 300 "Payoneer 3 Nov"
+```
+
+The request email has this command with the workspace id filled in. The script adds the minutes as a
+`topup` (via `creditWallet`), marks the workspace's open request done (the Billing page then stops showing
+"waiting for payment") and emails the requester that the minutes were added (owners and admins when no
+request was open). `--dry-run` shows the workspace, balance, open request and email recipients without
+changing anything; `--no-email` skips the email. Exported env wins over `--env-file`, which only supplies
+`SMTP_*` and `EMAIL_FROM` here. Without `EMAIL_DEV_SEND=1` the email is written to `apps/web/.outbox`
+instead of sent, and the script says so.
+
 ## Local development next to production
 
 Local and production share the LiveKit project, so set `LIVEKIT_AGENT_NAME=talkfront-agent-dev` in both

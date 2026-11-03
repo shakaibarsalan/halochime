@@ -13,6 +13,7 @@ import { LLM_MODELS, newAgentValues, STT_MODELS, TTS_VOICES } from "@/lib/agent-
 import { LANGUAGES } from "@/lib/languages";
 import { requireWorkspace } from "@/lib/session";
 import { normalizeDomain } from "@/lib/widget-origin";
+import { canManageIntegrations } from "./[id]/roles";
 
 export async function createAgent() {
   const ws = await requireWorkspace();
@@ -50,9 +51,15 @@ const AgentForm = z.object({
 });
 
 export async function saveAgent(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  const { organizationId } = await requireWorkspace();
+  const { organizationId, role } = await requireWorkspace();
+  // Where visitor details are emailed, where the agent loads and whether it is live are for owners and
+  // admins (like webhooks): a plain member's save keeps the stored values for those three.
+  const manager = canManageIntegrations(role);
   const parsed = AgentForm.safeParse({
     ...Object.fromEntries(formData),
+    // Locked (so not sent) for plain members; their values are ignored below anyway.
+    handoffEmail: formData.get("handoffEmail") ?? "",
+    allowedDomains: formData.get("allowedDomains") ?? "",
     handoffEnabled: formData.get("handoffEnabled") === "on",
     published: formData.get("published") === "on",
     modes: formData.getAll("modes"),
@@ -69,7 +76,7 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
   if (domains.length > 50) return { error: "Up to 50 allowed domains." };
 
   const [current] = await db
-    .select({ theme: agents.theme })
+    .select({ theme: agents.theme, handoffEmail: agents.handoffEmail, allowedDomains: agents.allowedDomains, status: agents.status })
     .from(agents)
     .where(and(eq(agents.id, f.id), eq(agents.organizationId, organizationId)))
     .limit(1);
@@ -106,7 +113,7 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
       llmModel: f.llmModel,
       maxDurationSec: f.maxDurationMin * 60,
       handoffEnabled: f.handoffEnabled,
-      handoffEmail: f.handoffEmail || null,
+      handoffEmail: manager ? f.handoffEmail || null : current.handoffEmail,
       theme: {
         color: f.themeColor.toLowerCase(),
         position: f.themePosition,
@@ -116,8 +123,8 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
         ...(imageVersion ? { imageVersion } : {}),
       },
       modes: f.modes,
-      allowedDomains: domains,
-      status: f.published ? "published" : "draft",
+      allowedDomains: manager ? domains : current.allowedDomains,
+      status: manager ? (f.published ? "published" : "draft") : current.status,
     })
     .where(and(eq(agents.id, f.id), eq(agents.organizationId, organizationId)))
     .returning({ id: agents.id });
@@ -127,7 +134,7 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
   revalidatePath(`/app/agents/${f.id}`);
   return {
     ok: true,
-    message: f.published && domains.length === 0
+    message: manager && f.published && domains.length === 0
       ? "Saved. It is published, but add your website's domain so it can load there."
       : "Saved.",
   };

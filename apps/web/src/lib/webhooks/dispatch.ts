@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { webhookDeliveries, webhookEndpoints } from "@/db/schema";
 import { FetchError, safeRequest } from "@/lib/knowledge/safe-fetch";
 import { conversationEndedEvent, handoffEvent, type WebhookEnvelope } from "./payloads";
+import { openWebhookSecret } from "./secret";
 import { SIGNATURE_HEADER, signatureHeader } from "./sign";
 
 // Sends events to the business's webhook endpoints (docs/integrations.md, "Webhooks").
@@ -44,7 +45,7 @@ async function attemptOnce(endpoint: Endpoint, event: WebhookEnvelope, rawBody: 
       headers: {
         "content-type": "application/json",
         "user-agent": "Halochime-Webhooks/1",
-        [SIGNATURE_HEADER]: signatureHeader(endpoint.secret, rawBody, t),
+        [SIGNATURE_HEADER]: signatureHeader(openWebhookSecret(endpoint.secret, endpoint.id), rawBody, t),
         "Halochime-Event": event.type,
         "Halochime-Event-Id": event.id,
       },

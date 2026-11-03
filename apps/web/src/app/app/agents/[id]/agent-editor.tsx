@@ -121,7 +121,7 @@ function LauncherPreview({ dark, icon, color, image, label }: { dark: boolean; i
   );
 }
 
-export function AgentEditor({ agent }: { agent: EditableAgent }) {
+export function AgentEditor({ agent, canManage }: { agent: EditableAgent; canManage: boolean }) {
   const [state, action] = useActionState(saveAgent, null);
   const [color, setColor] = useState(agent.theme.color);
   const [label, setLabel] = useState(agent.theme.label);
@@ -203,8 +203,12 @@ export function AgentEditor({ agent }: { agent: EditableAgent }) {
             label="Offer to take a message"
             hint="When it can't answer, it collects contact details and creates a handoff."
           />
-          <Field label="Handoff email (optional)" htmlFor="handoffEmail" hint="Messages for your team are emailed here. Leave empty to email the workspace owners and admins.">
-            <Input id="handoffEmail" name="handoffEmail" type="email" defaultValue={agent.handoffEmail} maxLength={320} />
+          <Field
+            label="Handoff email (optional)"
+            htmlFor="handoffEmail"
+            hint={canManage ? "Messages for your team are emailed here. Leave empty to email the workspace owners and admins." : "Only owners and admins can change this."}
+          >
+            <Input id="handoffEmail" name="handoffEmail" type="email" defaultValue={agent.handoffEmail} maxLength={320} disabled={!canManage} />
           </Field>
         </div>
       </Card>
@@ -377,11 +381,16 @@ export function AgentEditor({ agent }: { agent: EditableAgent }) {
           <Field
             label="Allowed domains"
             htmlFor="allowedDomains"
-            hint="One per line. example.com matches only that host; *.example.com matches its subdomains (add both if you need both)."
+            hint={
+              canManage
+                ? "One per line. example.com matches only that host; *.example.com matches its subdomains (add both if you need both)."
+                : "Only owners and admins can change this."
+            }
           >
             <Textarea
               id="allowedDomains"
               name="allowedDomains"
+              disabled={!canManage}
               defaultValue={agent.allowedDomains.join("\n")}
               rows={3}
               placeholder={"example.com\n*.example.com"}
@@ -392,7 +401,12 @@ export function AgentEditor({ agent }: { agent: EditableAgent }) {
             name="published"
             defaultChecked={agent.published}
             label="Published"
-            hint="Drafts only load inside this dashboard. Publish to go live on your allowed domains."
+            disabled={!canManage}
+            hint={
+              canManage
+                ? "Drafts only load inside this dashboard. Publish to go live on your allowed domains."
+                : "Drafts only load inside this dashboard. Only owners and admins can change this."
+            }
           />
         </div>
       </Card>

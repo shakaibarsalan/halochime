@@ -1,17 +1,18 @@
-import { eq } from "drizzle-orm";
 import { after, NextResponse } from "next/server";
 import { sweepStaleConversations } from "@/lib/conversations";
 import { type IdentityTokenClaims, WidgetSessionRequest, type WidgetSessionResponse } from "@talkfront/shared";
-import { db } from "@/db";
-import { conversations, wallets } from "@/db/schema";
+import { conversations } from "@/db/schema";
 import { livekitEnv } from "@/lib/env";
 import { clientIp, parseJson } from "@/lib/http";
 import { dispatchAgent, mintVisitorToken, roomNameFor } from "@/lib/livekit";
 import { rateLimit } from "@/lib/rate-limit";
 import { openIdentitySecret, verifyIdentityToken } from "@/lib/identity";
 import { cleanPageUrl, preflight, resolveWidgetAgent, widgetError } from "@/lib/widget/agent";
+import { startSessionWithinLimits } from "@/lib/widget/limits";
 import { corsHeaders } from "@/lib/widget-origin";
 
+// First, cheap layer: per IP, in memory, so per Vercel instance only. The real limits (per agent,
+// per workspace, voice credit) are counted in the database by startSessionWithinLimits below.
 const SESSIONS_PER_WINDOW = 10;
 const WINDOW_MS = 10 * 60 * 1000;
 
@@ -43,33 +44,33 @@ export async function POST(req: Request) {
     return widgetError(503, "not_configured", "Voice and chat are not configured yet (LiveKit keys missing).", headers);
   }
 
-  if (input.mode === "voice") {
-    const [wallet] = await db
-      .select({ balance: wallets.balanceSeconds })
-      .from(wallets)
-      .where(eq(wallets.organizationId, agent.organizationId))
-      .limit(1);
-    if (!wallet || wallet.balance <= 0) {
-      return widgetError(402, "out_of_credit", "This business is out of voice minutes.", headers);
-    }
-  }
-
   const conversationId = crypto.randomUUID();
   const identity = await identifyVisitor(agent, input.identityToken);
-  await db.insert(conversations).values({
-    id: conversationId,
-    organizationId: agent.organizationId,
-    agentId: agent.id,
-    mode: input.mode,
-    visitorId: identity?.sub ?? input.visitorId ?? null,
-    visitorName: identity?.name ?? null,
-    visitorEmail: identity?.email ?? null,
-    visitorVerified: identity !== null,
-    visitorAttributes: identity?.attributes ?? null,
-    pageUrl: cleanPageUrl(input.page?.url),
-    pageTitle: input.page?.title ?? null,
-    roomName: roomNameFor(conversationId),
-  });
+  // Per-agent burst, per-workspace running conversations and (voice) credit for every running call,
+  // counted and inserted under one lock so parallel requests cannot all slip past the limits.
+  const refusal = await startSessionWithinLimits(
+    { organizationId: agent.organizationId, agentId: agent.id, mode: input.mode },
+    async (tx) => {
+      await tx.insert(conversations).values({
+        id: conversationId,
+        organizationId: agent.organizationId,
+        agentId: agent.id,
+        mode: input.mode,
+        visitorId: identity?.sub ?? input.visitorId ?? null,
+        visitorName: identity?.name ?? null,
+        visitorEmail: identity?.email ?? null,
+        visitorVerified: identity !== null,
+        visitorAttributes: identity?.attributes ?? null,
+        pageUrl: cleanPageUrl(input.page?.url),
+        pageTitle: input.page?.title ?? null,
+        roomName: roomNameFor(conversationId),
+      });
+    },
+  );
+  if (refusal) {
+    if (refusal.retryAfterSec) headers.set("Retry-After", String(refusal.retryAfterSec));
+    return widgetError(refusal.status, refusal.code, refusal.message, headers);
+  }
 
   const metadata = { conversationId, agentId: agent.id, organizationId: agent.organizationId, mode: input.mode };
   const { token, roomName } = await mintVisitorToken(lk, metadata);

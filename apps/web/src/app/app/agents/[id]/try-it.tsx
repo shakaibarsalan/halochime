@@ -77,7 +77,7 @@ export function TryIt({ publicKey }: { publicKey: string }) {
             Could not load /widget.js. Build it with <code>npm run build -w @talkfront/widget</code>.
           </Notice>
         ) : null}
-        <p className="text-xs text-slate-500">Voice uses your trial minutes, like a real visitor.</p>
+        <p className="text-xs text-slate-500">Voice calls here use this workspace's voice minutes, like a real visitor.</p>
       </div>
     </Card>
   );

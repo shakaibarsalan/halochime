@@ -11,8 +11,8 @@ export function proxy(request: NextRequest) {
   const host = request.headers.get("host")?.toLowerCase() ?? "";
   const current = process.env.NEXT_PUBLIC_APP_URL;
   if (OLD_HOSTS.has(host) && current && (request.method === "GET" || request.method === "HEAD")) {
-    const target = new URL(request.nextUrl.pathname + request.nextUrl.search, current);
-    if (target.host !== host) return NextResponse.redirect(target, 308);
+    const target = sameSiteTarget(current, request.nextUrl.pathname, request.nextUrl.search);
+    if (target && target.host !== host) return NextResponse.redirect(target, 308);
   }
 
   // Cheap cookie check only. The dashboard layout validates the session and membership for real.
@@ -22,6 +22,23 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
   return NextResponse.next();
+}
+
+/**
+ * The current app address with this request's path and query. The path is set on a fixed URL of the
+ * app's origin (never parsed as a URL itself), so a path like "//evil.com" stays a path on our site.
+ * null when NEXT_PUBLIC_APP_URL is not a valid URL.
+ */
+function sameSiteTarget(appUrl: string, pathname: string, search: string): URL | null {
+  let target: URL;
+  try {
+    target = new URL(new URL(appUrl).origin);
+  } catch {
+    return null;
+  }
+  target.pathname = pathname;
+  target.search = search;
+  return target;
 }
 
 export const config = {

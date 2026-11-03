@@ -11,6 +11,7 @@ import { checkUrl, FetchError } from "@/lib/knowledge/safe-fetch";
 import { requireWorkspace } from "@/lib/session";
 import { deliverOnce } from "@/lib/webhooks/dispatch";
 import { sampleConversationEndedEvent } from "@/lib/webhooks/payloads";
+import { openWebhookSecret, sealWebhookSecret } from "@/lib/webhooks/secret";
 import { newWebhookSecret } from "@/lib/webhooks/sign";
 
 // Settings -> Webhooks. Owners and admins manage endpoints; every member can read them and their deliveries.
@@ -81,7 +82,10 @@ export async function createWebhookEndpoint(_prev: EndpointFormState, formData: 
     return { error: `A workspace can have up to ${MAX_ENDPOINTS} endpoints. Delete one first.`, values: parsed.values };
   }
 
-  await db.insert(webhookEndpoints).values({ organizationId: ws.organizationId, secret: newWebhookSecret(), ...parsed.data });
+  const id = crypto.randomUUID();
+  await db
+    .insert(webhookEndpoints)
+    .values({ id, organizationId: ws.organizationId, secret: sealWebhookSecret(newWebhookSecret(), id), ...parsed.data });
   revalidatePath("/app/settings");
   return { ok: true, message: "Endpoint added. Use Send test event to check it." };
 }
@@ -142,11 +146,11 @@ export async function revealWebhookSecret(id: string): Promise<SecretState> {
   const parsed = IdInput.safeParse(id);
   if (!parsed.success) return { error: "Endpoint not found." };
   const [row] = await db
-    .select({ secret: webhookEndpoints.secret })
+    .select({ id: webhookEndpoints.id, secret: webhookEndpoints.secret })
     .from(webhookEndpoints)
     .where(and(eq(webhookEndpoints.id, parsed.data), eq(webhookEndpoints.organizationId, ws.organizationId)))
     .limit(1);
-  return row ? { ok: true, secret: row.secret } : { error: "Endpoint not found." };
+  return row ? { ok: true, secret: openWebhookSecret(row.secret, row.id) } : { error: "Endpoint not found." };
 }
 
 export async function rollWebhookSecret(id: string): Promise<SecretState> {
@@ -157,7 +161,7 @@ export async function rollWebhookSecret(id: string): Promise<SecretState> {
   const secret = newWebhookSecret();
   const [row] = await db
     .update(webhookEndpoints)
-    .set({ secret })
+    .set({ secret: sealWebhookSecret(secret, parsed.data) })
     .where(and(eq(webhookEndpoints.id, parsed.data), eq(webhookEndpoints.organizationId, ws.organizationId)))
     .returning({ id: webhookEndpoints.id });
   return row ? { ok: true, secret } : { error: "Endpoint not found." };

@@ -9,6 +9,7 @@ import {
   CreditCard,
   Inbox,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   Menu,
   MessagesSquare,
@@ -36,6 +37,7 @@ const NAV: { href: string; label: string; icon: LucideIcon; exact?: boolean }[] 
 const NAV_BOTTOM: typeof NAV = [
   { href: "/app/billing", label: "Billing", icon: CreditCard },
   { href: "/app/settings", label: "Settings", icon: Settings },
+  { href: "/contact", label: "Help", icon: LifeBuoy },
 ];
 
 const initials = (s: string) =>

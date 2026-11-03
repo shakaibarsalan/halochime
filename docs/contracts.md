@@ -24,15 +24,20 @@ Rules for both:
 - CORS: answer `OPTIONS`, and echo the request `Origin` only when it is allowed.
 - Allowed origin = the agent's `allowedDomains` (exact host or `*.host`), plus the app's own origin
   (dashboard test), plus `localhost` / `127.0.0.1` when `NODE_ENV !== "production"`.
-- The agent must be `published`, except when the request comes from the app's own origin (testing a draft).
-- `session` refuses with `402 out_of_credit` when the workspace wallet is at or below 0 seconds and
-  mode is `voice`.
+- The agent must be `published`, except when the request comes from the app's own origin AND carries a
+  signed-in session of a member of the agent's workspace (the dashboard's test widget; the widget sends
+  cookies only to its own origin).
+- `session` refuses a `voice` session with `402 out_of_credit` unless the wallet holds 60 seconds for
+  every voice call already running in the workspace plus this one (`lib/widget/limits.ts`).
 - `session` creates the `conversations` row, then mints a LiveKit access token:
   - identity `visitor-<random>`, room `tf-<conversationId>`, grants: join, publish, subscribe, publish data
   - TTL 15 minutes for joining
   - `roomConfig.agents = [{ agentName: "talkfront-agent", metadata: JSON.stringify(DispatchMetadata) }]`
     so LiveKit dispatches our worker into that room.
-- Basic abuse guard: at most 10 sessions per IP per 10 minutes (in-memory is fine for the skeleton).
+- Abuse guards: at most 10 sessions per IP per 10 minutes (in-memory, first cheap layer); then, counted
+  in the database under a per-workspace lock: at most 60 new sessions per agent per minute, 10 running
+  voice calls and 50 running text chats per workspace ("running" = not ended and started in the last
+  65 minutes).
 - The widget sends `page.url` as origin + path only (query strings and hashes can carry tokens).
 
 Error codes for the public API (the widget shows a friendly message per code):
@@ -40,10 +45,10 @@ Error codes for the public API (the widget shows a friendly message per code):
 | Status | `error.code` | When |
 |---|---|---|
 | 400 | `invalid_request` | body or query fails validation |
-| 402 | `out_of_credit` | voice session with an empty wallet |
+| 402 | `out_of_credit` | voice session without enough minutes (see above) |
 | 403 | `origin_not_allowed` | origin not in the allowed list (config and session both check) |
-| 404 | `not_found` | unknown key, or agent not published (outside the app's own origin) |
-| 429 | `rate_limited` | too many sessions from one IP |
+| 404 | `not_found` | unknown key, or agent not published (outside a signed-in member's dashboard) |
+| 429 | `rate_limited` | too many sessions from one IP, too many new sessions for the agent, or the workspace's running-call limit is full (with `Retry-After`) |
 | 503 | `not_configured` | LiveKit env vars missing |
 
 ## 2. Agent → web (internal)

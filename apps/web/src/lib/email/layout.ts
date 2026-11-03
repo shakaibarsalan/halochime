@@ -54,6 +54,15 @@ export function codeBox(code: string): string {
 </td></tr></table>`;
 }
 
+/** A command or id to copy, in a small monospace box that wraps instead of widening the email. */
+export function codeLine(text: string): string {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 16px;">
+<tr><td style="padding:12px 14px;background-color:#f8f7fc;border:1px solid ${LINE};border-radius:10px;font-family:${MONO};font-size:12px;line-height:19px;color:${INK};word-break:break-all;">${esc(text)}</td></tr></table>`;
+}
+
+/** Monospace inline text, e.g. an id inside details(). */
+export const mono = (text: string) => `<span style="font-family:${MONO};font-size:13px;word-break:break-all;">${esc(text)}</span>`;
+
 /** Label / value rows, e.g. the visitor's contact details. Values must already be escaped. */
 export function details(rows: { label: string; html: string }[]): string {
   const tr = rows

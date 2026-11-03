@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Field, Input, Notice } from "@/components/ui";
 import { authClient } from "@/lib/auth-client";
-import { sendCode, type SendCodeResult } from "./actions";
+import { sendCode, verifyEmailCode, type SendCodeResult } from "./actions";
 import { CodeStep, codeErrorMessage } from "./code-step";
 import { rememberEmail, safeNext, withNext } from "./safe-next";
 
@@ -20,6 +20,8 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   // Typed values survive "Use a different email" (the password is asked for again).
   const [values, setValues] = useState({ name: "", email: "" });
   const [codeStep, setCodeStep] = useState<{ email: string; sent: SendCodeResult } | null>(null);
+  // The code only verifies the account whose password this is (verifyEmailCode). Kept in memory, never shown.
+  const passwordRef = useRef("");
   const isSignUp = mode === "sign-up";
   // Where to go afterwards (e.g. back to an invite). Validated, and carried across every step and screen.
   const next = safeNext(params.get("next"), "");
@@ -43,6 +45,7 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     const password = String(form.get("password") ?? "");
     const name = String(form.get("name") ?? "").trim();
     setValues({ name, email });
+    passwordRef.current = password;
 
     if (isSignUp) {
       // With verification required, this never signs in, and never says whether the email is taken.
@@ -80,10 +83,13 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
         initial={codeStep.sent}
         submitLabel="Verify email"
         pendingLabel="Verifying..."
-        onBack={() => setCodeStep(null)}
+        onBack={() => {
+          passwordRef.current = "";
+          setCodeStep(null);
+        }}
         onSubmit={async (otp) => {
-          const { error } = await authClient.emailOtp.verifyEmail({ email: codeStep.email, otp });
-          if (error) return codeErrorMessage(error);
+          const result = await verifyEmailCode(codeStep.email, otp, passwordRef.current);
+          if (!result.ok) return codeErrorMessage(result);
           router.replace(destination);
           router.refresh();
           return null;
@@ -169,6 +175,19 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
       <Button type="submit" size="lg" className="w-full" disabled={pending} aria-busy={pending}>
         {pending ? "Please wait..." : isSignUp ? "Create account" : "Sign in"}
       </Button>
+      {isSignUp ? (
+        <p className="text-center text-xs leading-5 text-slate-500">
+          By creating an account you agree to the{" "}
+          <Link href="/terms" className={linkClass}>
+            Terms
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy" className={`${linkClass} whitespace-nowrap`}>
+            Privacy Policy
+          </Link>
+          .
+        </p>
+      ) : null}
       <p className="text-center text-sm text-slate-500">
         {isSignUp ? "Already have an account? " : "New to Halochime? "}
         <Link href={otherHref} className={linkClass}>

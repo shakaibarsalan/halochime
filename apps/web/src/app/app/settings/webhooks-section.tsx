@@ -6,6 +6,7 @@ import { Card, CardHeader, EmptyState } from "@/components/ui";
 import { db } from "@/db";
 import { webhookDeliveries, webhookEndpoints } from "@/db/schema";
 import { formatDateTime } from "@/lib/format";
+import { openWebhookSecret } from "@/lib/webhooks/secret";
 import { maskSecret } from "@/lib/webhooks/sign";
 import { AddEndpoint, EndpointItem, type DeliveryRow, type EndpointView } from "./webhooks";
 
@@ -58,7 +59,7 @@ export async function WebhooksSection({ organizationId, canManage }: { organizat
     events: e.events.filter((x): x is (typeof WEBHOOK_EVENTS)[number] => (WEBHOOK_EVENTS as readonly string[]).includes(x)),
     enabled: e.enabled,
     // Only owners/admins see even the masked tail; the real secret is fetched on demand.
-    secretHint: canManage ? maskSecret(e.secret) : null,
+    secretHint: canManage ? maskSecret(openWebhookSecret(e.secret, e.id)) : null,
     createdAt: formatDateTime(e.createdAt),
     deliveries: deliveries[i]!.map(
       (d): DeliveryRow => ({

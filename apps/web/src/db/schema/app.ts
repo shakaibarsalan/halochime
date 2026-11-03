@@ -21,7 +21,7 @@ import {
   type VisitorAttributes,
   type WidgetTheme,
 } from "@talkfront/shared";
-import { organization } from "./auth";
+import { organization, user } from "./auth";
 
 // Product tables. Better Auth owns ./auth.ts (user, session, organization, member, ...).
 // A "workspace" in the UI is a Better Auth organization: one per business.
@@ -63,6 +63,7 @@ export const sourceStatus = pgEnum("knowledge_source_status", [
 export const handoffStatus = pgEnum("handoff_status", ["open", "closed"]);
 export const actionMethod = pgEnum("action_method", ["GET", "POST"]);
 export const usageKind = pgEnum("usage_kind", ["trial", "topup", "voice_seconds", "text_session"]);
+export const minuteRequestStatus = pgEnum("minute_request_status", ["open", "done", "replaced"]);
 
 export const agents = pgTable(
   "agents",
@@ -262,6 +263,35 @@ export const usageEvents = pgTable(
 );
 
 export const TRIAL_SECONDS = 30 * 60;
+
+/**
+ * A workspace asked for voice minutes (Billing page). There is no payment provider: the Halochime
+ * owner gets an email, sends a payment link, and after payment credits the minutes with
+ * scripts/credit-minutes.ts. That top up (creditWallet) marks the open request done.
+ * At most one open request per workspace; a new request replaces the open one.
+ */
+export const minuteRequests = pgTable(
+  "minute_requests",
+  {
+    id: id(),
+    organizationId: orgId(),
+    requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
+    /** Copied at request time, so the record still reads right if the user changes or leaves. */
+    requesterName: text("requester_name").notNull(),
+    requesterEmail: text("requester_email").notNull(),
+    minutes: integer("minutes").notNull(),
+    note: text("note"),
+    status: minuteRequestStatus("status").notNull().default("open"),
+    /** The top up that fulfilled it (status done). */
+    usageEventId: text("usage_event_id").references(() => usageEvents.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("minute_requests_org_idx").on(t.organizationId, t.createdAt.desc()),
+    uniqueIndex("minute_requests_one_open_uq").on(t.organizationId).where(sql`${t.status} = 'open'`),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // Integrations (spec: docs/integrations.md)

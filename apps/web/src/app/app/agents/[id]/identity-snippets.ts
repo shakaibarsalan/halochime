@@ -17,7 +17,7 @@ const token = jwt.sign(
     email: user.email,
     attributes: { plan: "pro" },
   },
-  process.env.TALKFRONT_IDENTITY_SECRET,
+  process.env.HALOCHIME_IDENTITY_SECRET,
   { algorithm: "HS256", expiresIn: "1h" },
 );`,
   },
@@ -39,7 +39,7 @@ token = jwt.encode(
         "iat": now,
         "exp": now + 3600,
     },
-    os.environ["TALKFRONT_IDENTITY_SECRET"],
+    os.environ["HALOCHIME_IDENTITY_SECRET"],
     algorithm="HS256",
 )`,
   },
@@ -58,7 +58,7 @@ $token = JWT::encode([
     'attributes' => ['plan' => 'pro'],
     'iat' => $now,
     'exp' => $now + 3600,
-], getenv('TALKFRONT_IDENTITY_SECRET'), 'HS256');`,
+], getenv('HALOCHIME_IDENTITY_SECRET'), 'HS256');`,
   },
 ];
 

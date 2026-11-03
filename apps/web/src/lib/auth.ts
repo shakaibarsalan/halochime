@@ -10,13 +10,16 @@ import { CODE_MINUTES, inBackground, sendCodeEmail, sendInviteEmail, sendPasswor
 import { appUrl, isProduction } from "./env";
 
 /**
- * Better Auth endpoints the browser may not call. Codes are only sent through our own server action
- * (app/(auth)/actions.ts: rate limited, and it can tell the user when sending failed), and the
- * passwordless and change-email flows aren't offered.
+ * Better Auth endpoints the browser may not call. Codes are only sent and email codes only checked
+ * through our own server actions (app/(auth)/actions.ts: rate limited; verifying also checks the
+ * account's password), invites only go through app/app/settings (limited), and the passwordless and
+ * change-email flows aren't offered. Server-side `auth.api` calls still work.
  */
 const DISABLED_PATHS = [
   "/send-verification-email",
   "/email-otp/send-verification-otp",
+  "/email-otp/verify-email",
+  "/organization/invite-member",
   "/email-otp/request-password-reset",
   "/forget-password/email-otp",
   "/email-otp/check-verification-otp",
@@ -67,6 +70,8 @@ function createAuth() {
     plugins: [
       organization({
         allowUserToCreateOrganization: true,
+        // Plenty for real businesses; stops scripted workspace creation (each can send invite emails).
+        organizationLimit: 10,
         // Emailed, and the dashboard still shows a copyable link (createInvite in app/app/settings/actions.ts).
         sendInvitationEmail: async (data) => {
           await sendInviteEmail(data);

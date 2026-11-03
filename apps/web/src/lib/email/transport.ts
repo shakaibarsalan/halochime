@@ -32,15 +32,30 @@ export class EmailNotConfiguredError extends Error {
 
 type SmtpEnv = { host: string; port: number; user: string; pass: string; from: string };
 
+/** The bare address in EMAIL_FROM ("Name <a@b.c>" or "a@b.c"), or null when it is not set. */
+function fromAddress(): string | null {
+  const from = process.env.EMAIL_FROM?.trim();
+  if (!from) return null;
+  return from.match(/<([^>]+)>/)?.[1]?.trim() || from;
+}
+
+/**
+ * Where emails meant for the Halochime team go (e.g. requests for voice minutes): SUPPORT_EMAIL,
+ * else the sender address in EMAIL_FROM. null when neither holds an email address.
+ */
+export function supportAddress(): string | null {
+  const address = process.env.SUPPORT_EMAIL?.trim() || fromAddress();
+  return address && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address) ? address : null;
+}
+
 function smtpEnv(): SmtpEnv | null {
   const host = process.env.SMTP_HOST?.trim();
   const port = Number(process.env.SMTP_PORT || 465);
   const user = process.env.SMTP_USER?.trim();
   const pass = process.env.SMTP_PASS;
-  const from = process.env.EMAIL_FROM?.trim();
-  if (!host || !user || !pass || !from || !Number.isFinite(port)) return null;
+  const address = fromAddress();
+  if (!host || !user || !pass || !address || !Number.isFinite(port)) return null;
   // Inboxes show the product name as the sender, whatever name EMAIL_FROM carries (it predates the rename).
-  const address = from.match(/<([^>]+)>/)?.[1]?.trim() ?? from;
   return { host, port, user, pass, from: `"Halochime" <${address}>` };
 }
 

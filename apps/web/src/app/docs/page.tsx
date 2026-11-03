@@ -6,6 +6,7 @@ import { lpFocus } from "@/components/landing/primitives";
 import { Logo } from "@/components/logo";
 import { cx } from "@/components/ui";
 import { appUrl } from "@/lib/env";
+import { LEGAL_LINKS, OG_IMAGE } from "@/lib/site";
 import { Code, MobileToc, Toc, type TocItem } from "./docs-client";
 import { cspSources, embedSnippet, platformGuides } from "./_content/platforms";
 
@@ -18,6 +19,14 @@ export const metadata: Metadata = {
     title: "Halochime developer docs",
     description: "One script tag, a small JavaScript API, identity tokens, actions and signed webhooks.",
     type: "article",
+    siteName: "Halochime",
+    url: "/docs",
+    images: [OG_IMAGE],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Halochime developer docs",
+    description: "One script tag, a small JavaScript API, identity tokens, actions and signed webhooks.",
   },
 };
 
@@ -277,7 +286,7 @@ const NODE_VERIFY = `import crypto from "node:crypto";
 import express from "express";
 
 const app = express();
-const secret = process.env.TALKFRONT_WEBHOOK_SECRET; // whsec_...
+const secret = process.env.HALOCHIME_WEBHOOK_SECRET; // whsec_...
 
 function verifyHalochime(rawBody, header, secret, toleranceSec = 300) {
   const parts = Object.fromEntries((header ?? "").split(",").map((p) => p.trim().split("=")));
@@ -311,7 +320,7 @@ import time
 from flask import Flask, abort, request
 
 app = Flask(__name__)
-SECRET = os.environ["TALKFRONT_WEBHOOK_SECRET"]  # whsec_...
+SECRET = os.environ["HALOCHIME_WEBHOOK_SECRET"]  # whsec_...
 
 
 def verify_halochime(raw_body: bytes, header: str, secret: str, tolerance: int = 300) -> bool:
@@ -348,7 +357,7 @@ export function halochimeToken(user) {
       email: user.email,
       attributes: { plan: user.plan, open_orders: user.openOrders },
     },
-    process.env.TALKFRONT_IDENTITY_SECRET,
+    process.env.HALOCHIME_IDENTITY_SECRET,
     { algorithm: "HS256", expiresIn: "1h" }, // adds iat and exp
   );
 }`;
@@ -371,7 +380,7 @@ def halochime_token(user) -> str:
             "iat": now,
             "exp": now + 3600,
         },
-        os.environ["TALKFRONT_IDENTITY_SECRET"],
+        os.environ["HALOCHIME_IDENTITY_SECRET"],
         algorithm="HS256",
     )`;
 
@@ -389,7 +398,7 @@ function halochime_token($user): string
         'attributes' => ['plan' => $user->plan, 'open_orders' => $user->open_orders],
         'iat' => $now,
         'exp' => $now + 3600,
-    ], getenv('TALKFRONT_IDENTITY_SECRET'), 'HS256');
+    ], getenv('HALOCHIME_IDENTITY_SECRET'), 'HS256');
 }`;
 
 // ---------------------------------------------------------------------------
@@ -1021,6 +1030,11 @@ style-src 'unsafe-inline';`,
             <Link href="/sign-up" className={cx("rounded hover:text-slate-900", lpFocusLight)}>
               Start free
             </Link>
+            {LEGAL_LINKS.map((l) => (
+              <Link key={l.href} href={l.href} className={cx("rounded hover:text-slate-900", lpFocusLight)}>
+                {l.label}
+              </Link>
+            ))}
           </nav>
           <p>© {year} Halochime</p>
         </div>

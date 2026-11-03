@@ -1,7 +1,7 @@
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, conversations, organization, usageEvents, wallets } from "@/db/schema";
+import { agents, conversations, minuteRequests, organization, usageEvents, wallets } from "@/db/schema";
 
 export async function getConversationWithAgent(conversationId: string) {
   const [row] = await db
@@ -43,25 +43,60 @@ function needsLowBalanceEmail(before: number, after: number, notifiedAt: Date | 
   return after < LOW_BALANCE_SECONDS && notifiedAt === null;
 }
 
+export type CreditResult = {
+  usageEventId: string;
+  balanceSeconds: number;
+  /** The open minutes request this top up fulfilled (marked done), if there was one. */
+  closedRequest: { id: string; minutes: number; requesterName: string; requesterEmail: string; createdAt: Date } | null;
+};
+
 /**
  * Adds voice seconds (top up, refund, manual credit) and re-arms the low-balance email.
  * Any code that raises a balance must go through here or clear low_balance_notified_at itself.
+ * A top up also marks the workspace's newest open minutes request done (Billing page).
  */
 export async function creditWallet(
   organizationId: string,
   seconds: number,
   entry: { kind: "trial" | "topup"; note: string },
-): Promise<void> {
+): Promise<CreditResult> {
   if (!Number.isInteger(seconds) || seconds <= 0) throw new Error("creditWallet: seconds must be a positive integer");
-  await db.transaction(async (tx) => {
-    await tx
+  return db.transaction(async (tx) => {
+    const [wallet] = await tx
       .insert(wallets)
       .values({ organizationId, balanceSeconds: seconds })
       .onConflictDoUpdate({
         target: wallets.organizationId,
         set: { balanceSeconds: sql`${wallets.balanceSeconds} + ${seconds}`, lowBalanceNotifiedAt: null },
-      });
-    await tx.insert(usageEvents).values({ organizationId, kind: entry.kind, seconds, note: entry.note });
+      })
+      .returning({ balance: wallets.balanceSeconds });
+    const [event] = await tx
+      .insert(usageEvents)
+      .values({ organizationId, kind: entry.kind, seconds, note: entry.note })
+      .returning({ id: usageEvents.id });
+
+    let closedRequest: CreditResult["closedRequest"] = null;
+    if (entry.kind === "topup") {
+      const newestOpen = tx
+        .select({ id: minuteRequests.id })
+        .from(minuteRequests)
+        .where(and(eq(minuteRequests.organizationId, organizationId), eq(minuteRequests.status, "open")))
+        .orderBy(desc(minuteRequests.createdAt))
+        .limit(1);
+      const [closed] = await tx
+        .update(minuteRequests)
+        .set({ status: "done", closedAt: sql`now()`, usageEventId: event!.id })
+        .where(and(inArray(minuteRequests.id, newestOpen), eq(minuteRequests.status, "open")))
+        .returning({
+          id: minuteRequests.id,
+          minutes: minuteRequests.minutes,
+          requesterName: minuteRequests.requesterName,
+          requesterEmail: minuteRequests.requesterEmail,
+          createdAt: minuteRequests.createdAt,
+        });
+      closedRequest = closed ?? null;
+    }
+    return { usageEventId: event!.id, balanceSeconds: wallet!.balance, closedRequest };
   });
 }
 

@@ -11,7 +11,7 @@ import { handoffEmail, lowMinutesEmail } from "./templates";
 // Both functions never throw: they log and return.
 
 /** Emails of the workspace's owners and admins (roles can be a comma list, e.g. "owner,admin"). */
-async function managerEmails(organizationId: string): Promise<string[]> {
+export async function managerEmails(organizationId: string): Promise<string[]> {
   const rows = await db
     .select({ email: user.email, role: member.role })
     .from(member)

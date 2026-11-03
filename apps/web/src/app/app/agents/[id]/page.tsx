@@ -65,6 +65,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
               allowedDomains: agent.allowedDomains,
               published: agent.status === "published",
             }}
+            canManage={canManage}
           />
           <CollectPanel agentId={agent.id} fields={readCollectFields(agent.collectFields)} canManage={canManage} />
           <IdentityPanel

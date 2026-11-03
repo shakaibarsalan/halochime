@@ -108,7 +108,7 @@ function SecretStep({ agentId, hasSecret, canManage }: { agentId: string; hasSec
           <CopyButton text={revealed} label="Copy" />
         </div>
         <p className="mt-2 text-xs leading-5 text-emerald-900/80">
-          Copy it now and keep it on your server, for example as <code className="font-mono">TALKFRONT_IDENTITY_SECRET</code>. You
+          Copy it now and keep it on your server, for example as <code className="font-mono">HALOCHIME_IDENTITY_SECRET</code>. You
           won&apos;t see it again.
         </p>
         <Button type="button" variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setRevealed(null)}>

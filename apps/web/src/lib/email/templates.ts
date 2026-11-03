@@ -1,6 +1,6 @@
 import "server-only";
 import { appUrl } from "../env";
-import { button, codeBox, details, divider, esc, escLines, heading, layout, link, p, quote, steps, strong } from "./layout";
+import { button, codeBox, codeLine, details, divider, esc, escLines, heading, layout, link, mono, p, quote, steps, strong } from "./layout";
 
 // One function per email. Each returns the subject, the HTML and a plain-text version.
 // Copy rules: short, plain, honest, no em dashes, nothing we don't actually do.
@@ -13,6 +13,20 @@ const fmtDate = (d: Date) => `${fullDate.format(d)} (UTC)`;
 const fmtDateTime = (d: Date) => `${dateTime.format(d).replace(",", " at")} UTC`;
 
 const firstName = (name: string | null | undefined) => name?.trim().split(/\s+/)[0] || "";
+
+const count = new Intl.NumberFormat("en-US");
+/** e.g. "300 voice minutes", "1 voice minute". */
+const voiceMinutes = (n: number) => `${count.format(n)} voice ${n === 1 ? "minute" : "minutes"}`;
+/** Whole minutes left in a balance, never below 0 (calls are billed per started minute). */
+const wholeMinutes = (seconds: number) => Math.max(0, Math.floor(seconds / 60));
+/** A balance after the word "balance", e.g. "1,002 minutes". */
+const balanceText = (seconds: number) => {
+  const n = wholeMinutes(seconds);
+  return `${count.format(n)} ${n === 1 ? "minute" : "minutes"}`;
+};
+
+/** Where the request form is. The low/out emails and the request emails link here. */
+const billingUrl = () => `${appUrl()}/app/billing#request-minutes`;
 
 function render(opts: {
   template: string;
@@ -153,24 +167,35 @@ export function welcomeEmail(opts: { email: string; name?: string | null; trialM
       cta: "See how to install",
     },
   ];
+  // Only a user's first own workspace gets the free minutes (app/onboarding/actions.ts).
+  const minutesLine = `The first workspace you create includes ${opts.trialMinutes} free voice minutes, and text chat is free during the beta.`;
+  const moreLine = "When you need more voice minutes, request them on the Billing page and we'll email you a payment link.";
+  const billing = billingUrl();
   return render({
     template: "welcome",
     subject: "Welcome to Halochime",
     preheader: "Your email is verified. Three steps to get your agent talking on your website.",
     body: [
       heading(hi ? `Welcome to Halochime, ${hi}` : "Welcome to Halochime"),
-      p(`Your email is verified. Here's how to get your agent answering visitors on your website. New workspaces include ${opts.trialMinutes} free voice minutes, and text chat is free during the beta.`),
+      p(`Your email is verified. Here's how to get your agent answering visitors on your website. ${esc(minutesLine)}`),
       steps(items),
       button(`${base}/app`, "Open your dashboard"),
+      p(`When you need more voice minutes, request them on the ${link(billing, "Billing page")} and we'll email you a payment link.`, {
+        muted: true,
+        small: true,
+        last: true,
+      }),
     ].join("\n"),
     footer: `You got this email because you created a Halochime account with ${opts.email}.`,
     text: [
       hi ? `Welcome to Halochime, ${hi}` : "Welcome to Halochime",
       "",
-      `Your email is verified. Here's how to get your agent answering visitors on your website. New workspaces include ${opts.trialMinutes} free voice minutes, and text chat is free during the beta.`,
+      `Your email is verified. Here's how to get your agent answering visitors on your website. ${minutesLine}`,
       "",
       ...items.flatMap((s, i) => [`${i + 1}. ${s.title}`, `   ${s.text}`, `   ${s.href}`, ""]),
       `Open your dashboard: ${base}/app`,
+      "",
+      `${moreLine} ${billing}`,
     ],
   });
 }
@@ -297,10 +322,11 @@ export function handoffEmail(opts: {
 // g. Voice minutes running low / out --------------------------------------------------------------
 
 export function lowMinutesEmail(opts: { workspace: string; balanceSeconds: number }): Rendered {
-  const href = `${appUrl()}/app/billing`;
+  const href = billingUrl();
   const out = opts.balanceSeconds <= 0;
-  const minutes = Math.max(0, Math.floor(opts.balanceSeconds / 60));
-  const left = `${minutes} voice ${minutes === 1 ? "minute" : "minutes"}`;
+  const left = voiceMinutes(wholeMinutes(opts.balanceSeconds));
+  const how =
+    "To get more, request minutes on the Billing page. We'll email you a payment link and add the minutes once it's paid. The Billing page also lists every call.";
   return render({
     template: out ? "minutes-out" : "minutes-low",
     subject: out ? `Voice is paused for ${opts.workspace}: no minutes left` : `${opts.workspace} has ${left} left`,
@@ -311,14 +337,14 @@ export function lowMinutesEmail(opts: { workspace: string; balanceSeconds: numbe
       ? [
           heading("You're out of voice minutes"),
           p(`${strong(opts.workspace)} has no voice minutes left, so visitors can't start voice calls right now. Text chat still works.`),
-          p(`Card top ups are coming soon. You can see your balance and every call on the Billing page.`),
-          button(href, "View billing"),
+          p(esc(how)),
+          button(href, "Request minutes"),
         ].join("\n")
       : [
           heading("Voice minutes running low"),
           p(`${strong(opts.workspace)} has ${strong(left)} left. When the balance reaches 0, visitors can't start voice calls until more minutes are added. Text chat keeps working.`),
-          p(`Card top ups are coming soon. You can see your balance and every call on the Billing page.`),
-          button(href, "View billing"),
+          p(esc(how)),
+          button(href, "Request minutes"),
         ].join("\n"),
     footer: `You got this email because you're an owner or admin of ${opts.workspace} on Halochime. We send it once until the balance goes up again.`,
     text: out
@@ -327,18 +353,165 @@ export function lowMinutesEmail(opts: { workspace: string; balanceSeconds: numbe
           "",
           `${opts.workspace} has no voice minutes left, so visitors can't start voice calls right now. Text chat still works.`,
           "",
-          "Card top ups are coming soon. You can see your balance and every call on the Billing page.",
+          how,
           "",
-          `View billing: ${href}`,
+          `Request minutes: ${href}`,
         ]
       : [
           "Voice minutes running low",
           "",
           `${opts.workspace} has ${left} left. When the balance reaches 0, visitors can't start voice calls until more minutes are added. Text chat keeps working.`,
           "",
-          "Card top ups are coming soon. You can see your balance and every call on the Billing page.",
+          how,
           "",
-          `View billing: ${href}`,
+          `Request minutes: ${href}`,
         ],
+  });
+}
+
+// h. Voice minutes: request (to the Halochime owner), confirmation, minutes added ----------------
+
+/** Shell-safe argument: ids are plain, but never paste anything unquoted into a command. */
+const shellArg = (s: string) => (/^[A-Za-z0-9_-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/** The owner's command to credit a paid request. Run from apps/web; deploy/README.md has the env. */
+export const creditCommand = (workspaceId: string, minutes: number) =>
+  `npx tsx --conditions=react-server --env-file=.env.local scripts/credit-minutes.ts ${shellArg(workspaceId)} ${minutes} "Payoneer"`;
+
+export function minutesRequestOwnerEmail(opts: {
+  workspace: string;
+  workspaceId: string;
+  requester: { name: string; email: string };
+  minutes: number;
+  note: string | null;
+  balanceSeconds: number;
+  /** An open request this one replaces. */
+  replaces: { minutes: number; createdAt: Date } | null;
+}): Rendered {
+  const who = opts.requester.name.trim() || opts.requester.email;
+  const asked = voiceMinutes(opts.minutes);
+  const balance = balanceText(opts.balanceSeconds);
+  const cmd = creditCommand(opts.workspaceId, opts.minutes);
+  const replaces = opts.replaces ? `${voiceMinutes(opts.replaces.minutes)} asked on ${fmtDate(opts.replaces.createdAt)}` : null;
+  const rows = [
+    { label: "Workspace", html: esc(opts.workspace) },
+    { label: "ID", html: mono(opts.workspaceId) },
+    { label: "From", html: `${esc(who)}<br>${link(`mailto:${opts.requester.email}`, opts.requester.email)}` },
+    { label: "Minutes", html: strong(count.format(opts.minutes)) },
+    { label: "Balance", html: esc(balance) },
+    ...(replaces ? [{ label: "Replaces", html: esc(replaces) }] : []),
+  ];
+  return render({
+    template: "minutes-request",
+    subject: `Minutes request: ${count.format(opts.minutes)} min for ${opts.workspace}`,
+    preheader: `${who} asked for ${asked}. Reply with a payment link.`,
+    body: [
+      heading("New request for voice minutes"),
+      p(`${esc(who)} asked for ${strong(asked)} for the ${strong(opts.workspace)} workspace. Reply to this email to send them a payment link.`),
+      details(rows),
+      opts.note ? quote(escLines(opts.note)) : "",
+      p(`After the payment is in, add the minutes. From ${strong("apps/web")}, with the production env set (deploy/README.md, "Credit minutes after payment"):`),
+      codeLine(cmd),
+      p(`Change the amount or the note if needed. Add ${strong("--dry-run")} first to check. The script closes this request and emails ${esc(opts.requester.email)} that the minutes were added.`, {
+        muted: true,
+        small: true,
+        last: true,
+      }),
+    ].join("\n"),
+    footer: "You got this email because this address receives Halochime support requests (SUPPORT_EMAIL, or the sender address).",
+    text: [
+      "New request for voice minutes",
+      "",
+      `${who} asked for ${asked} for the ${opts.workspace} workspace. Reply to this email to send them a payment link.`,
+      "",
+      `Workspace: ${opts.workspace}`,
+      `ID:        ${opts.workspaceId}`,
+      `From:      ${who} <${opts.requester.email}>`,
+      `Minutes:   ${count.format(opts.minutes)}`,
+      `Balance:   ${balance}`,
+      ...(replaces ? [`Replaces:  ${replaces}`] : []),
+      ...(opts.note ? ["", "Note:", opts.note] : []),
+      "",
+      `After the payment is in, add the minutes. From apps/web, with the production env set (deploy/README.md, "Credit minutes after payment"):`,
+      "",
+      `    ${cmd}`,
+      "",
+      `Change the amount or the note if needed. Add --dry-run first to check. The script closes this request and emails ${opts.requester.email} that the minutes were added.`,
+    ],
+  });
+}
+
+export function minutesRequestedEmail(opts: { email: string; name?: string | null; workspace: string; minutes: number }): Rendered {
+  const href = billingUrl();
+  const hi = firstName(opts.name);
+  const asked = voiceMinutes(opts.minutes);
+  const next = "As soon as it's paid, we add the minutes to your workspace and email you.";
+  const change = "Want a different amount? Reply to this email, or send a new request from the Billing page. It replaces this one.";
+  return render({
+    template: "minutes-requested",
+    subject: `We got your request for ${asked}`,
+    preheader: `We'll email you a payment link for ${asked} for ${opts.workspace}.`,
+    body: [
+      heading("Request received"),
+      p(`${hi ? `Hi ${esc(hi)}, we` : "We"} got your request for ${strong(asked)} for ${strong(opts.workspace)}.`),
+      p(`We'll email you a payment link at ${strong(opts.email)}. ${esc(next)}`),
+      button(href, "View billing"),
+      p(esc(change), { muted: true, small: true, last: true }),
+    ].join("\n"),
+    footer: `You got this email because you asked for voice minutes for ${opts.workspace} on Halochime.`,
+    text: [
+      "Request received",
+      "",
+      `${hi ? `Hi ${hi}, we` : "We"} got your request for ${asked} for ${opts.workspace}.`,
+      "",
+      `We'll email you a payment link at ${opts.email}. ${next}`,
+      "",
+      `View billing: ${href}`,
+      "",
+      change,
+    ],
+  });
+}
+
+export function minutesAddedEmail(opts: {
+  name?: string | null;
+  workspace: string;
+  minutes: number;
+  balanceSeconds: number;
+  /** requester: they asked for these minutes; manager: owner or admin of the workspace. */
+  reason: "requester" | "manager";
+}): Rendered {
+  const href = `${appUrl()}/app/billing`;
+  const hi = firstName(opts.name);
+  const added = voiceMinutes(opts.minutes);
+  const balance = balanceText(opts.balanceSeconds);
+  // Calls can take a balance below 0, so a small top up may not be enough to turn voice back on.
+  const state =
+    opts.balanceSeconds > 0
+      ? "Voice calls are on again."
+      : "Earlier calls went past the old balance, so voice stays paused until more minutes are added.";
+  return render({
+    template: "minutes-added",
+    subject: `${added} added to ${opts.workspace}`,
+    preheader: `Your voice balance is now ${balance}.`,
+    body: [
+      heading("Voice minutes added"),
+      p(`${hi ? `Hi ${esc(hi)}, we` : "We"} added ${strong(added)} to ${strong(opts.workspace)}. Your voice balance is now ${strong(balance)}. ${esc(state)}`),
+      p(`The Billing page shows the top up and every call.`),
+      button(href, "View billing"),
+    ].join("\n"),
+    footer:
+      opts.reason === "requester"
+        ? `You got this email because you asked for voice minutes for ${opts.workspace} on Halochime.`
+        : `You got this email because you're an owner or admin of ${opts.workspace} on Halochime.`,
+    text: [
+      "Voice minutes added",
+      "",
+      `${hi ? `Hi ${hi}, we` : "We"} added ${added} to ${opts.workspace}. Your voice balance is now ${balance}. ${state}`,
+      "",
+      "The Billing page shows the top up and every call.",
+      "",
+      `View billing: ${href}`,
+    ],
   });
 }

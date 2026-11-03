@@ -1,19 +1,26 @@
-import { desc, eq } from "drizzle-orm";
-import { Receipt, Wallet } from "lucide-react";
+import { and, desc, eq } from "drizzle-orm";
+import { Clock, Receipt, Wallet } from "lucide-react";
 import Link from "next/link";
-import { Badge, Button, Card, CardHeader, cx, EmptyState, PageHeader, Table, Td, Th, Tr, Truncate } from "@/components/ui";
+import { Badge, Card, CardHeader, cx, EmptyState, PageHeader, Table, Td, Th, Tr, Truncate } from "@/components/ui";
 import { db } from "@/db";
-import { usageEvents, wallets } from "@/db/schema";
+import { minuteRequests, usageEvents, wallets } from "@/db/schema";
 import { formatDateTime, formatMinutes } from "@/lib/format";
 import { requireWorkspace } from "@/lib/session";
+import { RequestMinutesForm } from "./request-form";
+import { canRequestMinutes } from "./roles";
 
 export const metadata = { title: "Billing" };
 
 const kindLabel = { trial: "Free trial", topup: "Top up", voice_seconds: "Voice call", text_session: "Text chat" } as const;
 
+const dayMonth = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+const dayMonthYear = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+/** "3 Nov", with the year when it isn't this year. UTC, like the rest of the dashboard. */
+const shortDate = (d: Date) => (d.getUTCFullYear() === new Date().getUTCFullYear() ? dayMonth : dayMonthYear).format(d);
+
 export default async function BillingPage() {
-  const { organizationId } = await requireWorkspace();
-  const [[wallet], events] = await Promise.all([
+  const { organizationId, role } = await requireWorkspace();
+  const [[wallet], events, [openRequest]] = await Promise.all([
     db.select().from(wallets).where(eq(wallets.organizationId, organizationId)),
     db
       .select()
@@ -21,14 +28,21 @@ export default async function BillingPage() {
       .where(eq(usageEvents.organizationId, organizationId))
       .orderBy(desc(usageEvents.createdAt))
       .limit(100),
+    db
+      .select({ minutes: minuteRequests.minutes, createdAt: minuteRequests.createdAt, requesterEmail: minuteRequests.requesterEmail })
+      .from(minuteRequests)
+      .where(and(eq(minuteRequests.organizationId, organizationId), eq(minuteRequests.status, "open")))
+      .orderBy(desc(minuteRequests.createdAt))
+      .limit(1),
   ]);
   const balance = wallet?.balanceSeconds ?? 0;
+  const canRequest = canRequestMinutes(role);
 
   return (
     <>
       <PageHeader title="Billing" description="Voice minutes are prepaid. Text chats are free during the beta." />
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <Card className="h-fit overflow-hidden">
+        <Card id="request-minutes" className="h-fit scroll-mt-6 overflow-hidden">
           <div className="aurora-surface relative px-5 pb-5 pt-4 text-white">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-white/85">Voice balance</p>
@@ -41,11 +55,37 @@ export default async function BillingPage() {
           </div>
           <div className="space-y-4 p-5">
             <p className="text-sm text-slate-500">
-              {balance <= 0 ? "Voice is paused until you top up. Text chat still works." : "Voice calls are billed per started minute."}
+              {balance <= 0
+                ? "Voice is paused until more minutes are added. Text chat still works."
+                : "Voice calls are billed per started minute."}
             </p>
-            <Button type="button" disabled className="w-full" title="Card payments are coming soon">
-              Top up (soon)
-            </Button>
+            {openRequest ? (
+              <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="flex items-start gap-2 text-sm font-medium text-amber-950">
+                  <Clock className="mt-0.5 size-4 shrink-0 text-amber-700" aria-hidden />
+                  <span title={formatDateTime(openRequest.createdAt)}>
+                    Requested {openRequest.minutes.toLocaleString("en-US")} minutes on {shortDate(openRequest.createdAt)}, waiting for
+                    payment
+                  </span>
+                </p>
+                <p className="mt-1 pl-6 text-xs leading-5 text-amber-900">
+                  We&apos;ll email a payment link to <span className="break-all font-medium">{openRequest.requesterEmail}</span>. The
+                  minutes are added once it&apos;s paid.
+                </p>
+              </div>
+            ) : null}
+          </div>
+          <div className="border-t border-slate-100 p-5">
+            <h2 className="text-[15px] font-semibold text-slate-900">Request minutes</h2>
+            {canRequest ? (
+              <div className="mt-3">
+                <RequestMinutesForm hasOpenRequest={Boolean(openRequest)} />
+              </div>
+            ) : (
+              <p className="mt-1 text-sm text-slate-500">
+                Only owners and admins can request minutes. Ask one of them if this workspace needs more.
+              </p>
+            )}
           </div>
         </Card>
         <Card>

@@ -1,7 +1,7 @@
 import "server-only";
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
-// Secrets the web app must read back later (action headers, identity secrets), encrypted at rest.
+// Secrets the web app must read back later (action headers, identity and webhook secrets), encrypted at rest.
 // AES-256-GCM with a key derived from BETTER_AUTH_SECRET by HKDF-SHA256. Each use has its own HKDF
 // `info`, so one key never opens another kind of secret. The row id is bound as additional data, so a
 // ciphertext copied onto another row does not decrypt.
@@ -11,6 +11,7 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:cr
 
 export const HEADERS_INFO = "talkfront-action-headers";
 export const IDENTITY_INFO = "talkfront-identity-secret";
+export const WEBHOOK_INFO = "talkfront-webhook-secret";
 
 const VERSION = "v1";
 const keys = new Map<string, Buffer>();
