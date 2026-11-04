@@ -86,7 +86,8 @@ REALTIME_TURN_DEFAULT = "livekit"
 # Speech probability needed to count as the visitor talking (OpenAI default 0.5). Higher ignores
 # background noise and the agent's own voice leaking back, which cut replies short in real calls.
 REALTIME_VAD_THRESHOLD = 0.6
-REALTIME_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+# The full model (not mini): in a 4 Nov test, mini wrote spoken Urdu down as Bengali and Korean.
+REALTIME_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 # Instructions plus the recent part of the call: keeps each turn small and fast.
 MAX_CONTEXT_ITEMS = 24
 GOODBYE_TEXT = (

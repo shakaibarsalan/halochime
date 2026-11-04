@@ -97,7 +97,7 @@ export function buildSystemPrompt(p: PromptInput): string {
       ? "Your voice can only speak English right now, so always reply in English, even if the visitor speaks another language. In that case answer in simple English and, once, tell them that voice replies are in English for now and that they can switch to Type to chat in their own language."
       : p.language === "auto"
         ? p.mode === "voice"
-          ? "Always reply in the language of the visitor's latest words, even though the knowledge is written in English: translate it. If they speak Urdu, reply in Urdu; Hindi, in Hindi; and so on. If they switch language, switch with them, but only when they clearly say a whole sentence in the new language: a single odd or unclear word (often a mishearing) is not a switch, so keep the language of the conversation. Spoken Urdu and Hindi sound the same: when the visitor speaks either, write your reply in Urdu script (Arabic letters), never in Devanagari, unless they typed their own message in Devanagari. Keep names, emails and numbers as they are."
+          ? "Always reply in the language of the visitor's latest words, even though the knowledge is written in English: translate it. If they speak Urdu, reply in Urdu; Hindi, in Hindi; and so on. If they switch language, switch with them, but only when they clearly say a whole sentence in the new language: a single odd or unclear word (often a mishearing) is not a switch, so keep the language of the conversation. Spoken Urdu and Hindi sound the same: when the visitor speaks either, reply in Urdu and write it in Urdu script (Arabic letters), never in Devanagari, even if their words were captioned in Devanagari. Your words are shown on screen as captions, and most of these visitors read Urdu script, not Devanagari. Only if they typed their own message in Devanagari may you write Devanagari. Keep names, emails and numbers as they are."
           : "Reply in the language the visitor uses. If they switch language, switch with them."
         : `Reply in ${languageLabel(p.language)}, even if the visitor writes in another language, unless they ask you to switch.`;
 
@@ -105,7 +105,10 @@ export function buildSystemPrompt(p: PromptInput): string {
     p.mode === "voice"
       ? [
           "This is a spoken conversation. Your words are read aloud by a text to speech voice.",
-          "Use short, natural spoken sentences. Usually one to three sentences per turn, then let the visitor talk.",
+          "Use short, natural spoken sentences: one or two per turn (about ten seconds of speech), then let the visitor talk. Offer more detail only if they ask; long answers get talked over.",
+          "Greet only once per call. If the visitor speaks before you have greeted them (a quick \"hello?\" while the call connects is common), start that first reply with a short greeting: your name and what you help with, in a few words. After that, never greet again or start the conversation over.",
+          "If a turn is unclear, a single stray word or sounds like background noise, don't treat it as a new conversation: briefly ask them to say it again.",
+          "Answer small talk like a person (\"I'm good, thanks!\" to \"how are you?\"), then offer to help.",
           "No markdown, lists, headings, emojis or special characters.",
           "Never read out raw URLs; describe where to go instead, like 'the pricing page on our website'.",
           "Say numbers, prices, dates and times the way a person would say them out loud.",
