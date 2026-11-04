@@ -42,6 +42,9 @@ const MIC_ARIA: Record<MicState, string> = {
 
 const MAX_MESSAGE_CHARS = 4000;
 
+/** Shown when the visitor's mic stays silent while the agent waits for them. */
+const MIC_SILENT_TEXT = "We can't hear you. Check that your microphone is on and the right one is selected.";
+
 interface StartAttempt {
   mode: ConversationMode;
   promise: Promise<Session | null>;
@@ -182,6 +185,10 @@ export class TalkfrontWidget extends HTMLElement {
   private noticeText!: HTMLDivElement;
   private noticeBtn!: HTMLButtonElement;
   private noticeAction: NoticeAction | null = null;
+  /** The notice on screen is the "we can't hear you" hint. */
+  private micHintShown = false;
+  /** That hint is due but another notice is up; it shows when that one goes. */
+  private micHintPending = false;
   private log!: HTMLOListElement;
   private emptyEl!: HTMLLIElement;
   private emptyGreeting!: HTMLParagraphElement;
@@ -631,6 +638,9 @@ export class TalkfrontWidget extends HTMLElement {
   }
 
   private showNotice(text: string, action: NoticeAction | null, info: boolean): void {
+    // Another notice replaces the mic hint; the hint comes back when that one goes, if still true.
+    this.micHintPending ||= this.micHintShown;
+    this.micHintShown = false;
     this.noticeEl.classList.toggle("info", info);
     this.noticeEl.setAttribute("role", info ? "status" : "alert");
     this.noticeText.textContent = text;
@@ -643,6 +653,27 @@ export class TalkfrontWidget extends HTMLElement {
   private clearNotice(): void {
     this.noticeEl.hidden = true;
     this.noticeAction = null;
+    this.micHintShown = false;
+    if (this.micHintPending) this.setMicHint(true);
+  }
+
+  /** "We can't hear you": shows (silent) or removes the hint. Only ever during a live voice call. */
+  private setMicHint(silent: boolean): void {
+    this.micHintPending = false;
+    if (!silent) {
+      if (this.micHintShown) this.clearNotice();
+      return;
+    }
+    if (this.micHintShown || this.mode !== "voice" || !this.liveVoiceSession()) return;
+    if (!this.noticeEl.hidden) {
+      // An error or the paused-sound notice comes first.
+      this.micHintPending = true;
+      return;
+    }
+    const canType = !!this.config?.modes.includes("text");
+    this.showNotice(MIC_SILENT_TEXT, canType ? { label: "Type instead", run: () => void this.switchMode("text") } : null, true);
+    this.micHintShown = true;
+    this.micHintPending = false;
   }
 
   // ---------------------------------------------------------------- transcript
@@ -942,8 +973,12 @@ export class TalkfrontWidget extends HTMLElement {
           this.clearNotice();
         }
       },
+      micSilent: (silent) => {
+        if (isMine()) this.setMicHint(silent);
+      },
       ended: (reason) => {
         if (!isMine()) return;
+        this.setMicHint(false);
         this.session = null;
         this.starting = null;
         this.setTyping(false);
@@ -960,6 +995,7 @@ export class TalkfrontWidget extends HTMLElement {
   private async endSession(divider: string | null): Promise<void> {
     const session = this.session;
     const wasStarting = !!this.starting;
+    this.setMicHint(false);
     this.session = null;
     this.starting = null;
     this.activity = "connecting";
@@ -997,6 +1033,8 @@ export class TalkfrontWidget extends HTMLElement {
     }
     try {
       await s.setMuted(!s.muted);
+      // Muting is on purpose: no "we can't hear you".
+      if (s.muted) this.setMicHint(false);
     } catch (err) {
       const e = toWidgetError(err);
       this.showError(e.kind === "unknown" ? new WidgetError("mic_denied", e.message) : e);

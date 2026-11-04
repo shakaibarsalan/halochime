@@ -19,6 +19,7 @@ import {
   type WidgetSessionResponse,
 } from "@talkfront/shared";
 import { WidgetError } from "./api";
+import { MicSilenceWatch } from "./miclevel";
 
 /** What the agent is doing, as far as the visitor needs to know. */
 export type AgentActivity = "connecting" | "listening" | "thinking" | "speaking";
@@ -41,6 +42,8 @@ export interface SessionEvents {
   /** Removes a caption that ended up empty. */
   dropSegment(id: string): void;
   audioBlocked(blocked: boolean): void;
+  /** Voice: the visitor's mic has stayed silent while the agent waits for them (true), or not any more. */
+  micSilent(silent: boolean): void;
   ended(reason: EndReason): void;
 }
 
@@ -101,6 +104,9 @@ export class Session {
   private agentWaiters: Array<() => void> = [];
   private closed = false;
   private openSegments = new Map<string, Segment>();
+  private agentActivity: AgentActivity = "connecting";
+  /** Voice: notices a mic that hears nothing (muted in hardware, wrong device, never started). */
+  private silenceWatch: MicSilenceWatch | null = null;
 
   constructor(
     mode: ConversationMode,
@@ -130,7 +136,7 @@ export class Session {
   }
 
   async start(info: WidgetSessionResponse): Promise<void> {
-    this.on.activity("connecting");
+    this.setActivity("connecting");
     await this.room.connect(info.livekitUrl, info.token, { autoSubscribe: true });
     if (this.closed) return;
 
@@ -139,6 +145,8 @@ export class Session {
         source: Track.Source.Microphone,
         stopMicTrackOnMute: true,
       });
+      if (this.closed) return;
+      this.watchForSilence();
     }
 
     // The agent may already be in the room before our connect finished.
@@ -166,6 +174,8 @@ export class Session {
   async end(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.silenceWatch?.stop();
+    this.silenceWatch = null;
     this.flushAgentWaiters();
     for (const topic of [TOPIC_TRANSCRIPTION, TOPIC_LIVE_CAPTION]) {
       try {
@@ -191,6 +201,29 @@ export class Session {
   }
 
   // -------------------------------------------------------------------------
+
+  private watchForSilence(): void {
+    const watch = new MicSilenceWatch({
+      track: () => this.micTrack?.mediaStreamTrack,
+      muted: () => this.muted || this.micTrack?.isMuted === true,
+      agent: () => this.agentActivity,
+      onChange: (silent) => {
+        if (!this.closed) this.on.micSilent(silent);
+      },
+    });
+    this.silenceWatch = watch;
+    watch.start();
+  }
+
+  /** The visitor's words came back from the server, so their mic works. */
+  private visitorHeard(): void {
+    this.silenceWatch?.heard();
+  }
+
+  private setActivity(state: AgentActivity): void {
+    this.agentActivity = state;
+    this.on.activity(state);
+  }
 
   private wire(): void {
     const room = this.room;
@@ -264,23 +297,23 @@ export class Session {
 
   private emitAgentState(): void {
     if (!this.agent) {
-      this.on.activity("connecting");
+      this.setActivity("connecting");
       return;
     }
     const state = this.agent.attributes[ATTR_AGENT_STATE];
     switch (state) {
       case "initializing":
-        this.on.activity("connecting");
+        this.setActivity("connecting");
         break;
       case "thinking":
-        this.on.activity("thinking");
+        this.setActivity("thinking");
         break;
       case "speaking":
-        this.on.activity("speaking");
+        this.setActivity("speaking");
         break;
       default:
         // "listening", "idle", or no attribute (agent without state support).
-        this.on.activity("listening");
+        this.setActivity("listening");
     }
   }
 
@@ -345,7 +378,9 @@ export class Session {
       for await (const chunk of reader) {
         if (this.closed) return;
         segment.text += chunk;
-        if (segment.text.trim()) this.on.segment({ ...segment });
+        if (!segment.text.trim()) continue;
+        if (speaker === "visitor") this.visitorHeard();
+        this.on.segment({ ...segment });
       }
     } catch {
       failed = true; // sender aborted the stream; keep what arrived
@@ -379,6 +414,7 @@ export class Session {
       const text = typeof msg.text === "string" ? msg.text : "";
       const turn = typeof msg.turn === "number" ? msg.turn : 0;
       if (text.trim()) {
+        this.visitorHeard();
         this.on.segment({ id: `${LIVE_CAPTION_ID}:${turn}`, speaker: "visitor", text, final: msg.final === true });
       }
     } catch {
