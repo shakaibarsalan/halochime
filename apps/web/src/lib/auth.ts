@@ -29,6 +29,11 @@ const DISABLED_PATHS = [
   "/request-password-reset",
 ];
 
+/** "Continue with Google" is offered only when the Google OAuth client is configured (GOOGLE_CLIENT_*). */
+export function googleSignInEnabled(): boolean {
+  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
+
 function createAuth() {
   return betterAuth({
     baseURL: process.env.BETTER_AUTH_URL || appUrl(),
@@ -36,6 +41,36 @@ function createAuth() {
     trustedOrigins: isProduction() ? [] : ["http://127.0.0.1:3000"],
     database: drizzleAdapter(getDb(), { provider: "pg", schema }),
     disabledPaths: DISABLED_PATHS,
+    // Google gives a verified email. It is linked to an existing account with the same email only when
+    // that account's email is verified too (Better Auth's requireLocalEmailVerified default), so a stranger
+    // who signed up with someone's address and never verified it can't end up owning their Google login.
+    socialProviders: googleSignInEnabled()
+      ? {
+          google: {
+            clientId: process.env.GOOGLE_CLIENT_ID!,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+            // Lets people with several Google accounts pick the right one.
+            prompt: "select_account",
+          },
+        }
+      : {},
+    databaseHooks: {
+      user: {
+        create: {
+          // Email sign-ups get the welcome email when they verify (afterEmailVerification below); Google
+          // sign-ups arrive already verified, so they get it here.
+          after: async (created) => {
+            if (created.emailVerified) inBackground("welcome email", () => sendWelcomeEmail(created));
+          },
+        },
+      },
+    },
+    session: {
+      // Stay signed in while you use it: each day you open Halochime pushes the end out again, and 30
+      // days without opening it signs you out. A password reset signs out every device.
+      expiresIn: 60 * 60 * 24 * 30,
+      updateAge: 60 * 60 * 24,
+    },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== "/sign-up/email") return;

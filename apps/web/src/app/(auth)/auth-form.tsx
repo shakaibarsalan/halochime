@@ -12,11 +12,12 @@ import { rememberEmail, safeNext, withNext } from "./safe-next";
 const linkClass =
   "rounded font-medium text-brand-600 hover:text-brand-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
 
-export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
+export function AuthForm({ mode, googleEnabled }: { mode: "sign-in" | "sign-up"; googleEnabled: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [googlePending, setGooglePending] = useState(false);
   // Typed values survive "Use a different email" (the password is asked for again).
   const [values, setValues] = useState({ name: "", email: "" });
   const [codeStep, setCodeStep] = useState<{ email: string; sent: SendCodeResult } | null>(null);
@@ -28,8 +29,27 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const fromInvite = next.startsWith("/invite/");
   const otherHref = withNext(isSignUp ? "/sign-in" : "/sign-up", next);
   const notice = params.get("reset") === "1" && !isSignUp ? "Your password was changed. Sign in with your new password." : null;
+  const googleError = googleErrorMessage(params.get("error"));
   // New accounts go to onboarding unless they came from somewhere (an invite), so they aren't asked to make a workspace first.
   const destination = next || (isSignUp ? "/onboarding" : "/app");
+
+  async function continueWithGoogle() {
+    setError(null);
+    setGooglePending(true);
+    const back = withNext(isSignUp ? "/sign-up" : "/sign-in", next);
+    const { error } = await authClient.signIn.social({
+      provider: "google",
+      callbackURL: destination,
+      // A brand-new account goes to onboarding (or back to the invite it came from).
+      newUserCallbackURL: next || "/onboarding",
+      errorCallbackURL: back,
+    });
+    // On success the browser is already on its way to Google.
+    if (error) {
+      setError(error.message || "Google sign-in didn't start. Please try again.");
+      setGooglePending(false);
+    }
+  }
 
   async function startCodeStep(email: string) {
     const sent = await sendCode(email, "verify");
@@ -123,6 +143,28 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
         </p>
       </div>
       {notice ? <Notice tone="success">{notice}</Notice> : null}
+      {googleError ? <Notice tone="error">{googleError}</Notice> : null}
+      {googleEnabled ? (
+        <>
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            className="w-full"
+            onClick={() => void continueWithGoogle()}
+            disabled={googlePending || pending}
+            aria-busy={googlePending}
+          >
+            <GoogleMark />
+            {googlePending ? "Opening Google..." : "Continue with Google"}
+          </Button>
+          <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-wider text-slate-400" role="separator">
+            <span className="h-px flex-1 bg-slate-200" />
+            or with email
+            <span className="h-px flex-1 bg-slate-200" />
+          </div>
+        </>
+      ) : null}
       {isSignUp ? (
         <Field label="Your name" htmlFor="name">
           <Input id="name" name="name" autoComplete="name" maxLength={100} className="h-10" defaultValue={values.name} />
@@ -175,9 +217,9 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
       <Button type="submit" size="lg" className="w-full" disabled={pending} aria-busy={pending}>
         {pending ? "Please wait..." : isSignUp ? "Create account" : "Sign in"}
       </Button>
-      {isSignUp ? (
+      {isSignUp || googleEnabled ? (
         <p className="text-center text-xs leading-5 text-slate-500">
-          By creating an account you agree to the{" "}
+          {isSignUp ? "By creating an account" : "By continuing"} you agree to the{" "}
           <Link href="/terms" className={linkClass}>
             Terms
           </Link>{" "}
@@ -195,5 +237,30 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
         </Link>
       </p>
     </form>
+  );
+}
+
+/** Better Auth sends people back here with ?error=... when Google sign-in fails. */
+function googleErrorMessage(code: string | null): string | null {
+  if (!code) return null;
+  switch (code.toLowerCase()) {
+    case "access_denied":
+      return "Google sign-in was cancelled.";
+    case "account_not_linked":
+      return "This email started signing up with a password but was never verified. Create your account with email and password to finish (it replaces the unfinished one), then Google works too.";
+    default:
+      return "Google sign-in didn't work. Please try again, or use your email and password.";
+  }
+}
+
+/** Google's "G" mark, as Google's sign-in branding asks for. */
+function GoogleMark() {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden className="size-[18px] shrink-0">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
   );
 }

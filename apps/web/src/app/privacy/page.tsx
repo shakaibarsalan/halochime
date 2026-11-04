@@ -89,6 +89,10 @@ export default function PrivacyPage() {
         <H3>Your account</H3>
         <List>
           <li>Your name, email address and password. The password is stored only as a secure hash.</li>
+          <li>
+            If you continue with Google: your name, email address and profile picture from your Google account, and Google&apos;s
+            account id. We don&apos;t get your Google password or anything else in your Google account.
+          </li>
           <li>The workspaces you create or join, your role in each, and the invites you send or receive.</li>
           <li>Your sign-in sessions, with the IP address and browser of each, so you stay signed in and we can spot misuse.</li>
           <li>One-time codes for verifying your email and resetting your password. They expire after 10 minutes.</li>
@@ -216,8 +220,8 @@ export default function PrivacyPage() {
             ["Anthropic", "Text replies, only for agents set to a Claude model.", "Conversation text and matching parts of your knowledge."],
             [
               "Google",
-              "Gmail sends our emails. Gemini can stand in as a backup text model.",
-              "Email addresses and email content; conversation text when Gemini is used.",
+              "Sign in with Google (if you choose it). Gmail sends our emails. Gemini can stand in as a backup text model.",
+              "Your Google sign-in; email addresses and email content; conversation text when Gemini is used.",
             ],
             ["GitHub", "Stores our nightly database backups, which are encrypted before they leave our server.", "Encrypted backup files only."],
           ]}
