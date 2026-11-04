@@ -6,7 +6,7 @@ import { ButtonLink } from "@/components/ui";
 import { db } from "@/db";
 import { invitation, organization } from "@/db/schema";
 import { requireUser } from "@/lib/session";
-import { hasWorkspace, ownsWorkspace } from "@/lib/workspaces";
+import { hadTrial, hasWorkspace, ownsWorkspace } from "@/lib/workspaces";
 import { OnboardingForm } from "./onboarding-form";
 
 export const metadata: Metadata = { title: "Workspace" };
@@ -29,7 +29,11 @@ export default async function OnboardingPage() {
     .limit(3);
 
   // Already in a workspace: this is "New workspace" from the dashboard's workspace menu.
-  const [existing, owner] = await Promise.all([hasWorkspace(session.user.id), ownsWorkspace(session.user.id)]);
+  const [existing, owner, trialUsed] = await Promise.all([
+    hasWorkspace(session.user.id),
+    ownsWorkspace(session.user.id),
+    hadTrial(session.user.id),
+  ]);
   if (existing) {
     return (
       <AuthShell>
@@ -43,7 +47,7 @@ export default async function OnboardingPage() {
           website you want to keep separate. We will create its first agent.
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-500">
-          {owner
+          {owner || trialUsed
             ? "Only your first workspace comes with free minutes, so this one starts with no voice minutes. Text chat is free."
             : "It comes with free trial minutes for voice."}
         </p>
@@ -62,7 +66,9 @@ export default async function OnboardingPage() {
         Welcome, <span className="break-words">{session.user.name}</span>
       </h1>
       <p className="mt-2 text-sm leading-6 text-slate-500">
-        Name your workspace after your business. We will create your first agent and add free trial minutes.
+        {trialUsed
+          ? "Name your workspace after your business. We will create your first agent. Your account has already had its free trial minutes, so voice starts at zero. Text chat is free."
+          : "Name your workspace after your business. We will create your first agent and add free trial minutes."}
       </p>
       {invites.length > 0 ? (
         <div className="mt-8 rounded-xl border border-brand-100 bg-brand-50/50 p-4">

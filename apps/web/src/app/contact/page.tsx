@@ -71,7 +71,8 @@ export default async function ContactPage({ searchParams }: { searchParams: Prom
                 .
               </Tip>
               <Tip icon={ShieldCheck} title="Deleting your data">
-                Choose Privacy or data deletion and write from the email on your account. We delete within 30 days. See the{" "}
+                Owners can delete conversations and whole workspaces in the dashboard. For your account, or to have us do it,
+                choose Privacy or data deletion and write from the email on your account. We delete within 30 days. See the{" "}
                 <Link href="/privacy#deletion" className={linkClass}>
                   Privacy Policy
                 </Link>

@@ -147,17 +147,26 @@ export function CardHeader({
   description,
   action,
   icon: Icon,
+  tone = "brand",
 }: {
   title: string;
   description?: ReactNode;
   action?: ReactNode;
   icon?: LucideIcon;
+  /** "danger" for cards that delete things. */
+  tone?: "brand" | "danger";
 }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
       <div className="flex min-w-0 items-start gap-3">
         {Icon ? (
-          <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-brand-50 text-brand-600 ring-1 ring-brand-100" aria-hidden>
+          <span
+            className={cx(
+              "mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ring-1",
+              tone === "danger" ? "bg-red-50 text-red-600 ring-red-100" : "bg-brand-50 text-brand-600 ring-brand-100",
+            )}
+            aria-hidden
+          >
             <Icon className="size-4" />
           </span>
         ) : null}

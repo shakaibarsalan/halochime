@@ -8,18 +8,21 @@ import { getDb } from "@/db";
 import * as schema from "@/db/schema/auth";
 import { CODE_MINUTES, inBackground, sendCodeEmail, sendInviteEmail, sendPasswordChangedEmail, sendWelcomeEmail } from "./email/send";
 import { appUrl, isProduction } from "./env";
+import { deleteWorkspaceData } from "./workspaces";
 
 /**
  * Better Auth endpoints the browser may not call. Codes are only sent and email codes only checked
  * through our own server actions (app/(auth)/actions.ts: rate limited; verifying also checks the
- * account's password), invites only go through app/app/settings (limited), and the passwordless and
- * change-email flows aren't offered. Server-side `auth.api` calls still work.
+ * account's password), invites only go through app/app/settings (limited), workspaces are only deleted
+ * there too (typed confirmation, keeps the free-trial record), and the passwordless and change-email
+ * flows aren't offered. Server-side `auth.api` calls still work.
  */
 const DISABLED_PATHS = [
   "/send-verification-email",
   "/email-otp/send-verification-otp",
   "/email-otp/verify-email",
   "/organization/invite-member",
+  "/organization/delete",
   "/email-otp/request-password-reset",
   "/forget-password/email-otp",
   "/email-otp/check-verification-otp",
@@ -114,6 +117,13 @@ function createAuth() {
         invitationExpiresIn: 60 * 60 * 24 * 7,
         // Inviting the same email again replaces the old link instead of failing.
         cancelPendingInvitationsOnReInvite: true,
+        // Deleting is allowed for owners only (Better Auth's default roles) and offered in Settings
+        // (deleteWorkspace in app/app/settings/actions.ts). This runs after Better Auth's own checks.
+        organizationHooks: {
+          beforeDeleteOrganization: async ({ organization }) => {
+            await deleteWorkspaceData(organization.id);
+          },
+        },
       }),
       emailOTP({
         otpLength: 6,

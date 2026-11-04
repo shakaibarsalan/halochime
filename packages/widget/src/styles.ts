@@ -287,6 +287,11 @@ button:disabled { cursor: default; }
   margin: 0 0 6px;
 }
 .empty-hint { margin: 0; font-size: 13px; }
+.empty-note {
+  max-width: 280px; margin: 14px auto 0;
+  font-size: 12px; line-height: 1.5; color: var(--tf-muted);
+  text-wrap: pretty;
+}
 .msg {
   max-width: 84%;
   padding: 9px 13px;

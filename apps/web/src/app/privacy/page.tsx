@@ -4,11 +4,12 @@ import { LEGAL_UPDATED, OPERATOR } from "@/lib/site";
 
 // Facts on this page come from the code: db/schema/app.ts (what is stored), apps/agent (no audio is
 // recorded), lib/summary.ts and apps/agent/agent.py (model providers), lib/webhooks/dispatch.ts
-// (30-day delivery log), deploy/server/backup.sh (encrypted nightly backups). Change them together.
+// (30-day delivery log), deploy/server/backup.sh (encrypted nightly backups), app/app/conversations/actions.ts
+// and lib/workspaces.ts deleteWorkspaceData (what the dashboard's delete buttons remove). Change them together.
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
-  description: "What Halochime stores, why, who else processes it, how long we keep it and how to have it deleted.",
+  description: "What Halochime stores, why, who else processes it, how long we keep it and how to delete it.",
   alternates: { canonical: "/privacy" },
 };
 
@@ -43,7 +44,7 @@ export default function PrivacyPage() {
       toc={TOC}
       intro={
         <p>
-          This policy explains what Halochime stores, why, who else handles it, and how to have it deleted. It covers the
+          This policy explains what Halochime stores, why, who else handles it, and how to delete it. It covers the
           businesses that use Halochime and the visitors who talk to their agents.
         </p>
       }
@@ -94,6 +95,7 @@ export default function PrivacyPage() {
             account id. We don&apos;t get your Google password or anything else in your Google account.
           </li>
           <li>The workspaces you create or join, your role in each, and the invites you send or receive.</li>
+          <li>Whether your account has had the free trial minutes, so they are given only once.</li>
           <li>Your sign-in sessions, with the IP address and browser of each, so you stay signed in and we can spot misuse.</li>
           <li>One-time codes for verifying your email and resetting your password. They expire after 10 minutes.</li>
           <li>Messages you send us through the contact form, and our replies.</li>
@@ -251,7 +253,7 @@ export default function PrivacyPage() {
             ["Account data", "While your account exists."],
             [
               "Agents, knowledge, conversations, transcripts and messages for your team",
-              "Until the business deletes them or asks us to. Knowledge, actions and webhook endpoints can be deleted in the dashboard.",
+              "Until the business deletes them or asks us to. In the dashboard, owners and admins can delete knowledge, actions, webhook endpoints and single conversations, and owners can delete the whole workspace.",
             ],
             ["Webhook delivery log", "30 days, then deleted automatically."],
             ["Verification and password codes", "10 minutes."],
@@ -269,15 +271,34 @@ export default function PrivacyPage() {
         <H2 id="deletion" n={8}>
           Deleting your data
         </H2>
+        <P>Businesses can delete their data themselves, in the dashboard:</P>
+        <List>
+          <li>
+            <B>One conversation.</B> Owners and admins open it under Conversations and choose <B>Delete conversation</B>. Its
+            transcript, summary, collected details, handoff requests and the webhook log entries about it are deleted. A
+            conversation that is still live can be deleted once it ends. The minutes a call used stay in the workspace&apos;s
+            usage history, without the conversation.
+          </li>
+          <li>
+            <B>The whole workspace.</B> Owners can delete it in Settings, under <B>Delete workspace</B>, by typing its name.
+            This removes its agents, knowledge, conversations, transcripts, messages, handoffs, webhooks, invites, voice
+            minutes and usage history, and everyone&apos;s access to it. Members keep their own accounts.
+          </li>
+        </List>
         <P>
-          There is no delete button for a whole account or workspace yet. To delete your account, a workspace or particular
-          conversations, send a request through the <A href={DELETE_HREF}>contact page</A> and choose{" "}
-          <B>Privacy or data deletion</B>. We check that the request comes from the account holder (for a workspace, its
-          owner), delete the data within 30 days and tell you when it&apos;s done.
+          Deleted data leaves our database right away. It can remain in our encrypted nightly backups until they expire, so
+          it is gone from those within 30 days too (see <A href="#retention">How long we keep it</A>). We keep the note that
+          your account has had its free trial, and records of purchases and refunds as the law requires.
         </P>
         <P>
-          Deleting a workspace removes its agents, knowledge, conversations, transcripts, messages, webhooks and usage
-          history. Unused voice minutes are covered by the <A href="/refund-policy">Refund Policy</A>.
+          You can still ask us instead. To delete your account, or a workspace or particular conversations for you, send a
+          request through the <A href={DELETE_HREF}>contact page</A> and choose <B>Privacy or data deletion</B>. We check
+          that the request comes from the account holder (for a workspace, its owner), delete the data within 30 days and
+          tell you when it&apos;s done.
+        </P>
+        <P>
+          Unused voice minutes are lost when a workspace is deleted. If you bought some in the last 14 days, ask for your
+          refund first, as the <A href="/refund-policy">Refund Policy</A> describes.
         </P>
       </Section>
 

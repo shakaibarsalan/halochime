@@ -4,13 +4,13 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/db";
-import { agents, TRIAL_SECONDS, usageEvents, wallets } from "@/db/schema";
+import { agents, TRIAL_SECONDS, trialGrants, usageEvents, wallets } from "@/db/schema";
 import type { ActionState } from "@/components/form-bits";
 import { newAgentValues } from "@/lib/agent-defaults";
 import { getAuth } from "@/lib/auth";
 import { randomUrlSafe } from "@/lib/ids";
 import { requireUser } from "@/lib/session";
-import { ownsWorkspace } from "@/lib/workspaces";
+import { hadTrial, ownsWorkspace } from "@/lib/workspaces";
 
 const Input = z.object({ name: z.string().trim().min(2, "Use at least 2 characters.").max(80) });
 
@@ -30,8 +30,10 @@ export async function createWorkspace(_prev: ActionState, formData: FormData): P
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid name." };
   const name = parsed.data.name;
 
-  // Checked before the new workspace exists (the user becomes its owner).
-  const trial = !(await ownsWorkspace(session.user.id));
+  // Checked before the new workspace exists (the user becomes its owner). trial_grants remembers trials of
+  // deleted workspaces; owning a workspace covers trials given before that table existed.
+  const [owns, hadOne] = await Promise.all([ownsWorkspace(session.user.id), hadTrial(session.user.id)]);
+  const eligible = !owns && !hadOne;
   const auth = getAuth();
   const h = await headers();
   let organizationId: string;
@@ -46,6 +48,16 @@ export async function createWorkspace(_prev: ActionState, formData: FormData): P
 
   // Wallet (with the free trial on a first own workspace), its ledger row, and a first agent, all or nothing.
   const agentId = await db.transaction(async (tx) => {
+    // Claiming the grant decides: of two workspaces made at the same moment, only one gets the trial.
+    const trial =
+      eligible &&
+      (
+        await tx
+          .insert(trialGrants)
+          .values({ userId: session.user.id, organizationId })
+          .onConflictDoNothing()
+          .returning({ userId: trialGrants.userId })
+      ).length > 0;
     await tx.insert(wallets).values({ organizationId, balanceSeconds: trial ? TRIAL_SECONDS : 0 }).onConflictDoNothing();
     if (trial) {
       await tx.insert(usageEvents).values({

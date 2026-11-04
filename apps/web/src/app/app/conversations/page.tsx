@@ -2,6 +2,7 @@ import type { ConversationOutcome } from "@talkfront/shared";
 import { count, desc, eq, sql } from "drizzle-orm";
 import { ChevronLeft, ChevronRight, Flag, MessagesSquare } from "lucide-react";
 import Link from "next/link";
+import { FlashNotice } from "@/components/form-bits";
 import { Badge, ButtonLink, Card, EmptyState, ModeBadge, PageHeader, Table, Td, Th, Tr, Truncate } from "@/components/ui";
 import { db } from "@/db";
 import { agents, conversations } from "@/db/schema";
@@ -13,9 +14,10 @@ export const metadata = { title: "Conversations" };
 
 const PAGE_SIZE = 50;
 
-export default async function ConversationsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+export default async function ConversationsPage({ searchParams }: { searchParams: Promise<{ page?: string; deleted?: string }> }) {
   const { organizationId } = await requireWorkspace();
-  const page = Math.max(1, Number.parseInt((await searchParams).page ?? "1", 10) || 1);
+  const params = await searchParams;
+  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
 
   const [rows, [total]] = await Promise.all([
     db
@@ -48,6 +50,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   return (
     <>
       <PageHeader title="Conversations" description="Every voice call and chat, newest first." />
+      {params.deleted === "1" ? <FlashNotice param="deleted" message="Conversation deleted." /> : null}
       <Card>
         {rows.length === 0 ? (
           <EmptyState

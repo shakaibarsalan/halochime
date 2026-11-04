@@ -14,7 +14,8 @@ export function SubmitButton({
 }: ComponentProps<typeof Button> & { pendingLabel?: string }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={pending || props.disabled} aria-busy={pending} {...props}>
+    // Props first, so a passed disabled={false} can never re-enable the button while the action runs.
+    <Button type="submit" {...props} disabled={pending || props.disabled} aria-busy={pending}>
       {pending ? (pendingLabel ?? "Saving...") : children}
     </Button>
   );
@@ -34,6 +35,29 @@ export function ActionMessage({ state }: { state: ActionState }) {
   if (state.error) return <Notice tone="error">{state.error}</Notice>;
   if (state.message) return <Notice tone="success">{state.message}</Notice>;
   return null;
+}
+
+/**
+ * One-off success notice after a redirect, e.g. `?deleted=1`. Drops the query param right away so a
+ * refresh or a copied link doesn't show it again, and fades like ActionMessage.
+ */
+export function FlashNotice({ message, param }: { message: string; param: string }) {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has(param)) {
+      url.searchParams.delete(param);
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    const t = setTimeout(() => setVisible(false), 5000);
+    return () => clearTimeout(t);
+  }, [param]);
+  if (!visible) return null;
+  return (
+    <div className="mb-4">
+      <Notice tone="success">{message}</Notice>
+    </div>
+  );
 }
 
 export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {

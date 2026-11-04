@@ -1,0 +1,93 @@
+# Uptime check for https://halochime.vercel.app (free "site down" alert).
+#
+# Every 30 minutes it checks the home page, the widget script and the widget config
+# API (with our demo key, and with Attendify's key from its own site). Each check is
+# tried up to 3 times, 30 s apart, so one network blip does not alert. If a check
+# still fails, the run fails and GitHub emails the repo owner about the failed
+# scheduled run: that email is the alert.
+#
+# Why only in the public repo: the private repo (shakaibarsalan/talkfront) is mirrored
+# to the public one (shakaibarsalan/halochime) after every change. Actions minutes are
+# free on public repos and scarce on the private one, so the job is skipped everywhere
+# except the public mirror.
+#
+# No secrets: the demo key is read from the live home page, and both keys are public
+# widget keys (they sit in the page source of the sites that embed the widget).
+
+name: Uptime
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.repository == 'shakaibarsalan/halochime'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SITE: https://halochime.vercel.app
+      ATTENDIFY_KEY: pk_MYPwGMvyYQGas90piYTaD9BX
+    steps:
+      - name: Check the live site
+        shell: bash
+        run: |
+          set -u
+          body=$(mktemp)
+          failed=0
+
+          # get URL [ORIGIN]: saves the body to $body; true only when the answer is HTTP 200.
+          get() {
+            local args=(--silent --show-error --max-time 30 --output "$body" --write-out '%{http_code}')
+            if [ -n "${2:-}" ]; then args+=(--header "Origin: $2"); fi
+            local code
+            code=$(curl "${args[@]}" "$1") || return 1
+            if [ "$code" != 200 ]; then echo "  $1 answered $code"; return 1; fi
+          }
+
+          # check NAME COMMAND...: up to 3 tries, 30 s apart, so one blip does not alert.
+          check() {
+            local name=$1 attempt
+            shift
+            for attempt in 1 2 3; do
+              if "$@"; then echo "OK      $name"; return 0; fi
+              echo "  try $attempt of 3 failed"
+              if [ "$attempt" -lt 3 ]; then sleep 30; fi
+            done
+            echo "::error::FAILED  $name"
+            failed=1
+          }
+
+          home() { get "$SITE/"; }
+
+          widget_script() {
+            get "$SITE/widget.js" || return 1
+            grep -q "talkfront-widget" "$body" || { echo "  widget.js has no talkfront-widget"; return 1; }
+          }
+
+          demo_config() {
+            get "$SITE/" || return 1
+            local key
+            key=$(grep -oE 'pk_[A-Za-z0-9_-]{20,}' "$body" | head -n 1)
+            if [ -z "$key" ]; then echo "  no demo key (pk_...) on the home page"; return 1; fi
+            get "$SITE/api/widget/config?key=$key" "$SITE"
+          }
+
+          attendify_config() {
+            get "$SITE/api/widget/config?key=$ATTENDIFY_KEY" "https://attendify.pro"
+          }
+
+          check "home page returns 200" home
+          check "widget.js returns 200 and is the widget" widget_script
+          check "widget config for the demo key returns 200" demo_config
+          check "widget config for Attendify returns 200" attendify_config
+
+          exit "$failed"

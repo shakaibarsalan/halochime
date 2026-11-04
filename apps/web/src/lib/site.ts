@@ -1,7 +1,7 @@
 // Shared facts for the public pages: legal page dates, footer links and the social card.
 
 /** When the privacy policy, terms and refund policy last changed. Update all three pages together. */
-export const LEGAL_UPDATED = { label: "3 November 2026", iso: "2026-11-03" } as const;
+export const LEGAL_UPDATED = { label: "4 November 2026", iso: "2026-11-04" } as const;
 
 /** Who runs the service, as the legal pages name it. */
 export const OPERATOR = "Halochime, run by Shakaib Arsalan, Pakistan";

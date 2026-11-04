@@ -159,8 +159,8 @@ export default function RefundPolicyPage() {
         </H2>
         <P>
           Deleting a workspace also deletes its wallet. If it has unused minutes from a purchase made in the last 14 days, ask
-          for that refund before or together with your deletion request. Other unused minutes can&apos;t be refunded and are
-          lost when the workspace is deleted.
+          for that refund before you delete it in Settings, or together with your deletion request if you ask us to delete it.
+          Other unused minutes can&apos;t be refunded and are lost when the workspace is deleted.
         </P>
         <P>
           Questions about a payment or your balance: <A href={BILLING_HREF}>contact us</A>. See also the{" "}

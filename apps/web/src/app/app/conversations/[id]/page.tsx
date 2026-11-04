@@ -9,12 +9,14 @@ import { agents, conversations, messages } from "@/db/schema";
 import { displayValue, orderCollected, OUTCOME_LABELS, OUTCOME_TONES, readCollectFields, SENTIMENT_LABELS } from "@/lib/collect";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { requireWorkspace } from "@/lib/session";
+import { canDeleteConversations } from "../roles";
+import { DeleteConversationButton } from "./delete-button";
 
 export const metadata = { title: "Conversation" };
 
 export default async function ConversationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { organizationId } = await requireWorkspace();
+  const { organizationId, role } = await requireWorkspace();
   const [row] = await db
     .select({ c: conversations, agentName: agents.name, collectFields: agents.collectFields })
     .from(conversations)
@@ -55,6 +57,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
         title="Conversation"
         back={{ href: "/app/conversations", label: "Conversations" }}
         description={`${row.agentName} · ${formatDateTime(c.startedAt)}`}
+        action={canDeleteConversations(role) ? <DeleteConversationButton conversationId={c.id} live={c.status === "active"} /> : undefined}
         badge={
           <>
             {c.status === "active" ? (

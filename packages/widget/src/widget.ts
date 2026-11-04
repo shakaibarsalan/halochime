@@ -186,6 +186,8 @@ export class TalkfrontWidget extends HTMLElement {
   private emptyEl!: HTMLLIElement;
   private emptyGreeting!: HTMLParagraphElement;
   private emptyHint!: HTMLParagraphElement;
+  /** Tells the visitor it is an AI and that the chat is kept. */
+  private emptyNote!: HTMLParagraphElement;
   private modesEl!: HTMLDivElement;
   /** Optional third button next to Talk | Type, set by the host page (Halochime.setSwitch). */
   private switchBtn!: HTMLButtonElement;
@@ -418,7 +420,12 @@ export class TalkfrontWidget extends HTMLElement {
     // Transcript
     this.emptyGreeting = h("p", { class: "empty-greeting" });
     this.emptyHint = h("p", { class: "empty-hint" });
-    this.emptyEl = h("li", { class: "empty" }, this.emptyGreeting, this.emptyHint);
+    this.emptyNote = h(
+      "p",
+      { class: "empty-note", hidden: true },
+      "You're chatting with an AI assistant. Conversations are saved so the team can follow up.",
+    );
+    this.emptyEl = h("li", { class: "empty" }, this.emptyGreeting, this.emptyHint, this.emptyNote);
     this.log = h("ol", { class: "log", role: "log", "aria-live": "polite", "aria-label": "Conversation" }, this.emptyEl);
 
     // Footer: mode switch + end
@@ -555,6 +562,7 @@ export class TalkfrontWidget extends HTMLElement {
       : this.mode === "voice"
         ? "Tap the microphone and start talking."
         : "Type a message to start.";
+    this.emptyNote.hidden = !ready;
 
     // Header status + mic state
     const mic = this.micState();

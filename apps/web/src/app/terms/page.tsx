@@ -189,9 +189,9 @@ export default function TermsPage() {
         </H2>
         <List>
           <li>
-            You can stop using Halochime at any time. To close your account or a workspace, ask through the{" "}
-            <A href="/contact?topic=privacy">contact page</A>. We delete it within 30 days, as the{" "}
-            <A href="/privacy#deletion">Privacy Policy</A> describes.
+            You can stop using Halochime at any time. An owner can delete a workspace in its Settings. To close your
+            account, or to have us delete a workspace for you, ask through the <A href="/contact?topic=privacy">contact page</A>.
+            We delete it within 30 days, as the <A href="/privacy#deletion">Privacy Policy</A> describes.
           </li>
           <li>
             We may suspend or close an account, a workspace or an agent if it breaks these terms, puts the service or other

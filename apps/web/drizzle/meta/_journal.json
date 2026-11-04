@@ -43,6 +43,13 @@
       "when": 1793724061141,
       "tag": "0005_minute_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793780685159,
+      "tag": "0006_self_serve_deletion",
+      "breakpoints": true
     }
   ]
 }

@@ -1,11 +1,12 @@
 import { and, asc, desc, eq } from "drizzle-orm";
-import { Building2, MailPlus, Users } from "lucide-react";
+import { Building2, MailPlus, TriangleAlert, Users } from "lucide-react";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th, Tr, Truncate } from "@/components/ui";
 import { db } from "@/db";
-import { invitation, member, user } from "@/db/schema";
+import { invitation, member, user, wallets } from "@/db/schema";
 import { appUrl } from "@/lib/env";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatMinutes } from "@/lib/format";
 import { requireWorkspace } from "@/lib/session";
+import { DeleteWorkspaceForm } from "./delete-workspace";
 import { InviteForm, InviteRowActions, MemberRoleControl, RemoveMemberButton } from "./members";
 import { WebhooksSection } from "./webhooks-section";
 import { WorkspaceNameForm } from "./workspace-form";
@@ -19,8 +20,9 @@ const isOwner = (r: string) => r.split(",").includes("owner");
 export default async function SettingsPage() {
   const ws = await requireWorkspace();
   const canManage = ws.role === "owner" || ws.role === "admin";
+  const canDelete = isOwner(ws.role);
 
-  const [members, invites] = await Promise.all([
+  const [members, invites, [wallet]] = await Promise.all([
     db
       .select({
         id: member.id,
@@ -45,6 +47,9 @@ export default async function SettingsPage() {
       .from(invitation)
       .where(and(eq(invitation.organizationId, ws.organizationId), eq(invitation.status, "pending")))
       .orderBy(desc(invitation.createdAt)),
+    canDelete
+      ? db.select({ balance: wallets.balanceSeconds }).from(wallets).where(eq(wallets.organizationId, ws.organizationId))
+      : Promise.resolve([]),
   ]);
 
   const owners = members.filter((m) => isOwner(m.role)).length;
@@ -201,6 +206,23 @@ export default async function SettingsPage() {
         </Card>
 
         <WebhooksSection organizationId={ws.organizationId} canManage={canManage} />
+
+        {canDelete ? (
+          <Card id="delete-workspace">
+            <CardHeader
+              title="Delete workspace"
+              icon={TriangleAlert}
+              tone="danger"
+              description="Permanently delete this workspace and everything in it. Only owners see this."
+            />
+            <div className="p-5">
+              <DeleteWorkspaceForm
+                name={ws.organizationName}
+                balance={wallet && wallet.balance > 0 ? formatMinutes(wallet.balance) : null}
+              />
+            </div>
+          </Card>
+        ) : null}
       </div>
     </>
   );

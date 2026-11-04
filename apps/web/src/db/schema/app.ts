@@ -231,7 +231,11 @@ export const handoffRequests = pgTable(
     status: handoffStatus("status").notNull().default("open"),
     createdAt: createdAt(),
   },
-  (t) => [index("handoff_requests_org_idx").on(t.organizationId, t.status)],
+  (t) => [
+    index("handoff_requests_org_idx").on(t.organizationId, t.status),
+    // Deleting a conversation unlinks (SET NULL) its rows; without this every delete scans the table.
+    index("handoff_requests_conversation_idx").on(t.conversationId),
+  ],
 );
 
 /** Prepaid voice time per workspace. New workspaces get a free trial balance. */
@@ -259,10 +263,28 @@ export const usageEvents = pgTable(
     note: text("note"),
     createdAt: createdAt(),
   },
-  (t) => [index("usage_events_org_idx").on(t.organizationId, t.createdAt)],
+  (t) => [
+    index("usage_events_org_idx").on(t.organizationId, t.createdAt),
+    // Deleting a conversation unlinks (SET NULL) its usage rows; without this every delete scans the ledger.
+    index("usage_events_conversation_idx").on(t.conversationId),
+  ],
 );
 
 export const TRIAL_SECONDS = 30 * 60;
+
+/**
+ * Users who have had the free trial. Outlives the workspace that got it, so deleting a workspace and
+ * making a new one doesn't give the trial again. Onboarding also checks for an owned workspace, which
+ * covers trials given before this table existed.
+ */
+export const trialGrants = pgTable("trial_grants", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  /** The workspace that got the trial. Plain text, no FK: that workspace may have been deleted since. */
+  organizationId: text("organization_id").notNull(),
+  createdAt: createdAt(),
+});
 
 /**
  * A workspace asked for voice minutes (Billing page). There is no payment provider: the Halochime

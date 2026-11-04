@@ -1,13 +1,13 @@
 "use server";
 
-import { and, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt } from "drizzle-orm";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { ActionState } from "@/components/form-bits";
 import { db } from "@/db";
-import { invitation, member } from "@/db/schema";
+import { invitation, member, wallets } from "@/db/schema";
 import { getAuth } from "@/lib/auth";
 import { trackDelivery } from "@/lib/email/send";
 import { appUrl } from "@/lib/env";
@@ -192,4 +192,54 @@ export async function removeMember(_prev: ActionState, formData: FormData): Prom
   if (isSelf) redirect("/app");
   revalidatePath("/app/settings");
   return { ok: true, message: "Member removed." };
+}
+
+// ---------------------------------------------------------------------------
+// Danger zone: delete the whole workspace. Owners only, confirmed by typing its name.
+
+/** `redirectTo`: where the browser goes next, with a full page load so no cached workspace list is left. */
+export type DeleteWorkspaceState = (ActionState & { redirectTo?: string }) | null;
+
+const isOwnerRole = (role: string) => role.split(",").some((r) => r.trim() === "owner");
+
+/**
+ * Better Auth deletes it (and checks again that the caller is an owner); its beforeDeleteOrganization
+ * hook (lib/auth.ts -> deleteWorkspaceData) first removes everything in it in one transaction. Then the
+ * user lands in their next workspace, or on onboarding when this was their last one.
+ */
+export async function deleteWorkspace(_prev: DeleteWorkspaceState, formData: FormData): Promise<DeleteWorkspaceState> {
+  const ws = await requireWorkspace();
+  if (!isOwnerRole(ws.role)) return { error: "Only an owner can delete the workspace." };
+  const typed = String(formData.get("confirmName") ?? "").trim();
+  if (typed !== ws.organizationName.trim()) return { error: "Type the workspace name exactly as it is shown to confirm." };
+  const { organizationId } = ws;
+
+  const [wallet] = await db
+    .select({ balance: wallets.balanceSeconds })
+    .from(wallets)
+    .where(eq(wallets.organizationId, organizationId));
+  const h = await headers();
+  try {
+    await getAuth().api.deleteOrganization({ body: { organizationId }, headers: h });
+  } catch (err) {
+    console.error("deleteOrganization failed", err);
+    return { error: authMessage(err, "Could not delete the workspace. Please try again.") };
+  }
+  // No personal data: enough to answer a later question about the balance it had.
+  console.info(`workspace deleted: ${organizationId} by user ${ws.user.id}, ${wallet?.balance ?? 0}s of voice left`);
+
+  const [next] = await db
+    .select({ organizationId: member.organizationId })
+    .from(member)
+    .where(eq(member.userId, ws.user.id))
+    .orderBy(asc(member.createdAt))
+    .limit(1);
+  if (!next) return { ok: true, redirectTo: "/onboarding" };
+  try {
+    await getAuth().api.setActiveOrganization({ body: { organizationId: next.organizationId }, headers: h });
+  } catch (err) {
+    // requireWorkspace falls back to the first workspace anyway.
+    console.error("setActiveOrganization after delete failed", err);
+  }
+  return { ok: true, redirectTo: "/app" };
 }
