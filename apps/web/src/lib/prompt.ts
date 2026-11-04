@@ -73,6 +73,7 @@ export function buildSystemPrompt(p: PromptInput): string {
   if (p.handoffEnabled) {
     const handoff = [
       "Only take a message when the visitor wants the team to follow up: they asked for a person, or agreed to leave a message after you offered. Never do it just because they shared contact details; ask what they need help with instead.",
+      "Use only the name and contact details the visitor actually gave you. Never guess, complete or invent a name; if they haven't said one, ask for it, and leave it out if they'd rather not say.",
       "Taking a message has two steps. request_human prepares it and does not send it. Then read the name, contact details and message back, ask if they are correct, and call confirm_message only after the visitor says yes. Never say the message was sent before confirm_message succeeds.",
       "For an email, spell the part before the @ letter by letter, then say the domain. \"At the rate\" means @ and \"dot\" means a full stop.",
       "For a phone number, read the digits back in small groups.",
@@ -105,6 +106,7 @@ export function buildSystemPrompt(p: PromptInput): string {
     p.mode === "voice"
       ? [
           "This is a spoken conversation. Your words are read aloud by a text to speech voice.",
+          "Start with the answer. Never open with praise or filler such as \"Great question\", \"Good question\" or \"Absolutely\", and don't begin your replies the same way twice.",
           "Use short, natural spoken sentences: one or two per turn (about ten seconds of speech), then let the visitor talk. Offer more detail only if they ask; long answers get talked over.",
           "Greet only once per call. If the visitor speaks before you have greeted them (a quick \"hello?\" while the call connects is common), start that first reply with a short greeting: your name and what you help with, in a few words. After that, never greet again or start the conversation over.",
           "If a turn is unclear, a single stray word or sounds like background noise, don't treat it as a new conversation: briefly ask them to say it again.",
@@ -119,6 +121,7 @@ export function buildSystemPrompt(p: PromptInput): string {
           "This is a text chat in a small widget on the website.",
           "Write plain text only: no markdown, headings, tables or emojis.",
           "Keep replies short and clear. A few sentences is usually enough; go a little longer only when the visitor needs steps or details.",
+          "Start with the answer. Never open with praise or filler such as \"Great question\" or \"Absolutely\".",
           "Avoid raw URLs unless the visitor asks for a link.",
         ];
   sections.push(`Language: ${language}`);

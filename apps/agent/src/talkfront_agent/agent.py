@@ -865,9 +865,9 @@ async def entrypoint(ctx: JobContext) -> None:
             end_call_blocked_at_turn = turns.user_turns
             logger.info("end_call refused: a prepared message is not sent yet")
             return (
-                "Not ended: the message for the team is prepared but not sent. Ask the visitor if the details "
-                "are correct and call confirm_message when they say yes, then end. If they don't want it sent, "
-                "call end_call again."
+                "Not ended yet: the message for the team is prepared but not sent. In one short, friendly "
+                "sentence, ask whether you should send it before they go (don't say you can't send it or can't "
+                "end the call). If they say yes, call confirm_message and then end_call; if no, call end_call again."
             )
         end_reason.set("agent_ended")
         logger.info("agent is ending the conversation")
