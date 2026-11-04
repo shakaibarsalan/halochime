@@ -553,7 +553,10 @@ def build_session(runtime: RuntimeConfig, proc: JobProcess, *, realtime: bool = 
             vad=proc.userdata.get("vad") or silero.VAD.load(min_silence_duration=VAD_MIN_SILENCE_S),
             turn_handling={
                 "turn_detection": MultilingualModel(),
-                "endpointing": {"mode": "dynamic", "min_delay": 0.3, "max_delay": 1.0},
+                # At least 0.6 s of quiet before a turn ends: at 0.3 s a natural pause split "How fast do
+                # you reply | after I tap the talk button?" into two turns (4 Nov), the first reply was
+                # thrown away and the model answered the meaningless tail.
+                "endpointing": {"mode": "dynamic", "min_delay": 0.6, "max_delay": 1.3},
                 # The visitor's voice stops the agent: real words, or speech clearly louder than the
                 # agent's own echo (decided in gate_interruptions; words come a second or two late).
                 # Noise and the echo don't, and a stop without words resumes the reply.
