@@ -49,8 +49,9 @@ MEASURE_EVERY_CHUNKS = 100
 MIN_SPEECH_CHUNKS = 80
 # Loudness of the agent's audio counted as sound.
 SOUND_RMS = 0.01
-# Lining up must be this clear (correlation) to move the reference.
-MIN_CORRELATION = 0.5
+# Lining up must be this clear (correlation) to move the reference: real echo matched 0.71 to 0.98, and
+# a visitor with no echo once matched 0.56 by chance.
+MIN_CORRELATION = 0.65
 # Moves smaller than this are left to the canceller (it reaches about 0.5 s; each move makes it adapt again).
 MIN_SHIFT_CHUNKS = 15
 # Agent audio waiting to be played is capped (a long reply pushed ahead of real time).
