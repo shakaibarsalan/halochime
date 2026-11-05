@@ -31,7 +31,7 @@ from livekit import rtc
 from livekit.agents import NOT_GIVEN, stt
 from livekit.plugins import deepgram
 
-from .echo import began_at, spoken_duration
+from .echo import began_at, script_of, spoken_duration
 
 logger = logging.getLogger("talkfront.live_captions")
 
@@ -45,6 +45,11 @@ HOLD_LEAD_S = 1.5
 HOLD_LAG_S = 1.0
 # Without audio timestamps, words are placed this long before they arrived (speech to text delay).
 STT_DELAY_S = 0.4
+# A caption turn counts as English (see english_text) with at least this many words, heard this surely.
+ENGLISH_MIN_WORDS = 2
+ENGLISH_MIN_CONFIDENCE = 0.75
+# Caption turns remembered for english_text.
+TURNS_KEPT = 30
 
 
 async def send_json(room: rtc.Room, identity: str | None, topic: str, payload: dict[str, object]) -> None:
@@ -106,8 +111,31 @@ class LiveCaptions:
         self._last_sentence_of_old_turn = False
         # The agent's current or latest speech: [start, end (None while speaking), visitor talked over].
         self._speech: list[float | bool | None] | None = None
-        # Words heard during the current speech, waiting to be shown or dropped: (text, final).
-        self._held: list[tuple[str, bool]] = []
+        # Words heard during the current speech, waiting to be shown or dropped: (text, final, language, confidence).
+        self._held: list[tuple[str, bool, str | None, float | None]] = []
+        # Each caption turn's final words with the language speech to text heard and how surely.
+        self._heard_by_turn: dict[int, list[tuple[str, str | None, float | None]]] = {}
+
+    def english_text(self, turn: int) -> str | None:
+        """The turn's words when speech to text surely heard English, else None. The realtime model's
+        transcript of an accented English speaker can come out in Urdu script ("Okay, goodbye" as
+        "اوکے، گڈ بائے", 5 Nov); these words are then the ones to show and keep."""
+        heard = self._heard_by_turn.get(turn)
+        if not heard:
+            return None
+        text = " ".join(t for t, _, _ in heard)
+        languages = [str(lang).lower() for _, lang, _ in heard if lang]
+        confidences = [c for _, _, c in heard if c is not None]
+        if (
+            script_of(text) != "LATIN"
+            or len(text.split()) < ENGLISH_MIN_WORDS
+            or not languages
+            or not all(lang.startswith("en") for lang in languages)
+            or not confidences
+            or sum(confidences) / len(confidences) < ENGLISH_MIN_CONFIDENCE
+        ):
+            return None
+        return text
 
     def agent_speaking(self, speaking: bool, *, now: float | None = None) -> None:
         """The agent started or stopped speaking. Held words go when it finishes on its own."""
@@ -128,10 +156,19 @@ class LiveCaptions:
             return
         self._speech[2] = True
         held, self._held = self._held, []
-        for text, final in held:
-            self._show(text, final)
+        for text, final, language, confidence in held:
+            self._show(text, final, language, confidence)
 
-    def heard(self, text: str, final: bool, *, began: float | None = None, duration: float = 0.0) -> None:
+    def heard(
+        self,
+        text: str,
+        final: bool,
+        *,
+        began: float | None = None,
+        duration: float = 0.0,
+        language: str | None = None,
+        confidence: float | None = None,
+    ) -> None:
         """Words that are not the agent's echo by their wording: shown now, held, or dropped."""
         at = began if began is not None else time.time() - duration - STT_DELAY_S
         speech = self._speech
@@ -140,21 +177,27 @@ class LiveCaptions:
             assert isinstance(start, float)
             if at >= start - HOLD_LEAD_S and (end is None or at <= float(end) + HOLD_LAG_S):
                 if end is None:
-                    self._held.append((text, final))
+                    self._held.append((text, final, language, confidence))
                 return  # heard during a sentence the agent finished: its echo
-        self._show(text, final)
+        self._show(text, final, language, confidence)
 
-    def _show(self, text: str, final: bool) -> None:
+    def _show(self, text: str, final: bool, language: str | None = None, confidence: float | None = None) -> None:
         turn = self._turn_for(final)
         self._sentence_open = not final
         shown = " ".join([*self._finals, text])
         if final:
             self._finals.append(text)
+            self._heard_by_turn.setdefault(turn, []).append((text, language, confidence))
+            for old in [t for t in self._heard_by_turn if t <= turn - TURNS_KEPT]:
+                del self._heard_by_turn[old]
             if self._on_final is not None:
                 with contextlib.suppress(Exception):
                     self._on_final(" ".join(self._finals))
         if self._outbox is not None:
-            self._outbox.put_nowait({"text": shown, "final": final, "turn": turn})
+            payload: dict[str, object] = {"text": shown, "final": final, "turn": turn}
+            if self.english_text(turn) is not None:
+                payload["en"] = True  # the widget keeps these words if the transcript comes in another script
+            self._outbox.put_nowait(payload)
 
     def start(self, participant: rtc.RemoteParticipant) -> None:
         self._visitor = participant.identity
@@ -243,7 +286,9 @@ class LiveCaptions:
                             self._sentence_open = False
                             self._last_sentence_of_old_turn = False
                         continue
-                    self.heard(text, final, began=began, duration=duration)
+                    self.heard(
+                        text, final, began=began, duration=duration, language=alt.language, confidence=alt.confidence
+                    )
             finally:
                 pumping.cancel()
                 await stream.aclose()

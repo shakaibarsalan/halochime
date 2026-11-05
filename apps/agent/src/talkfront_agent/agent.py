@@ -58,7 +58,7 @@ from .api import (
 )
 from . import greeting_cache
 from . import aec
-from .echo import EchoGuard, began_at, spoken_duration
+from .echo import EchoGuard, began_at, script_of, spoken_duration
 from .lifecycle import EndReason, HandoffDraft, OnceGuard, TurnCounter
 from .live_captions import TOPIC_REPLY_CUT, LiveCaptions, send_json
 from .tools import build_tools, search_formatted
@@ -863,6 +863,23 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.info("realtime reply started %.0f ms after the turn ended", (time.monotonic() - done) * 1000)
             agent.turn_done_at = None
 
+    # Realtime: the visitor's messages so far (the n-th is live caption turn n), and the live captions.
+    user_items = {"n": 0}
+    captions_ref: dict[str, LiveCaptions | None] = {"c": None}
+
+    def _as_heard(text: str, index: int) -> str:
+        """The visitor's words to keep: an accented English speaker's transcript can come out in Urdu
+        script ("Okay, goodbye" as "اوکے، گڈ بائے"); when the live captions surely heard English for
+        that message, their words are kept instead."""
+        captions = captions_ref["c"]
+        if captions is None or not text or script_of(text) in (None, "LATIN"):
+            return text
+        english = captions.english_text(index)
+        if english is None or not 0.4 <= len(english.split()) / max(len(text.split()), 1) <= 2.5:
+            return text
+        logger.info("visitor spoke English but the transcript came in another script: keeping the English words")
+        return english
+
     # Notices to the widget still being sent (kept so they are not garbage collected half way).
     notices: set[asyncio.Task[None]] = set()
 
@@ -893,13 +910,16 @@ async def entrypoint(ctx: JobContext) -> None:
             # Voice only: replies are shown as they are spoken, so a cut one stops on screen too.
             if item.role == "assistant" and item.interrupted and runtime.mode == "voice":
                 _show_reply_cut(item)
+            text = item.text_content
             if item.role == "user":
+                if realtime and runtime.mode == "voice":
+                    text = _as_heard(text or "", user_items["n"])
+                user_items["n"] += 1
                 turns.user_turn()
                 last_visitor_text["previous"] = last_visitor_text["text"]
-                last_visitor_text["text"] = item.text_content or ""
+                last_visitor_text["text"] = text or ""
                 speech_turns["transcribed"] = speech_turns["started"]
                 transcript_arrived.set()
-            text = item.text_content
             created_at = item.created_at
             ended = last_speech_end["t"]
             if item.role == "user" and realtime and ended > last_speech_end["used"]:
@@ -1053,7 +1073,7 @@ async def entrypoint(ctx: JobContext) -> None:
         if echo_free is not None:
             caption_frames = asyncio.Queue()
             echo_free.listeners.append(caption_frames.put_nowait)
-        captions = LiveCaptions(
+        captions = captions_ref["c"] = LiveCaptions(
             ctx.room,
             language=stt_language,
             keyterms=list(runtime.agent.voice.vocabulary) if stt_language.startswith("en") else [],

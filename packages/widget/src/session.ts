@@ -33,6 +33,8 @@ export interface Segment {
   speaker: Speaker;
   text: string;
   final: boolean;
+  /** Live captions only: speech to text surely heard English (see VisitorSpeech.transcript). */
+  english?: boolean;
 }
 
 export type EndReason = "local" | "remote" | "connection_lost";
@@ -452,12 +454,18 @@ export class Session {
     }
     if (this.closed || this.mode !== "voice") return;
     try {
-      const msg = JSON.parse(raw) as { text?: unknown; final?: unknown; turn?: unknown };
+      const msg = JSON.parse(raw) as { text?: unknown; final?: unknown; turn?: unknown; en?: unknown };
       const text = typeof msg.text === "string" ? msg.text : "";
       const turn = typeof msg.turn === "number" ? msg.turn : 0;
       if (text.trim()) {
         this.visitorHeard();
-        this.on.segment({ id: `${LIVE_CAPTION_ID}:${turn}`, speaker: "visitor", text, final: msg.final === true });
+        this.on.segment({
+          id: `${LIVE_CAPTION_ID}:${turn}`,
+          speaker: "visitor",
+          text,
+          final: msg.final === true,
+          english: msg.en === true,
+        });
       }
     } catch {
       // not ours

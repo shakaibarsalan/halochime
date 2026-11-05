@@ -108,6 +108,21 @@ check("zero-overlap Urdu does not shift: each transcript takes the oldest waitin
   same(c.shown(), ["visitor: مجھے قیمت بتائیں۔ اور ڈیلیوری کتنے دن میں ہوگی؟"]);
 });
 
+check("English heard surely keeps its words when the transcript comes in Urdu script", () => {
+  // 5 Nov: "Okay, goodbye" from an accented English speaker was transcribed "اوکے، گڈ بائے".
+  const c = conversation();
+  c.speech.live("visitor:live:0", "Okay, goodbye.", true, true);
+  c.speech.transcript("visitor:SG_a", "اوکے، گڈ بائے۔", true);
+  same(c.shown(), ["visitor: Okay, goodbye."]);
+});
+
+check("Roman Urdu captions not heard as English still take the Urdu transcript", () => {
+  const c = conversation();
+  c.speech.live("visitor:live:0", "Theek hai shukriya", true, false);
+  c.speech.transcript("visitor:SG_a", "ٹھیک ہے، شکریہ۔", true);
+  same(c.shown(), ["visitor: ٹھیک ہے، شکریہ۔"]);
+});
+
 check("a transcript that arrives after the agent started answering goes into its own bubble above", () => {
   const c = conversation();
   c.speech.live("visitor:live:0", "Mujhe price batao", true);

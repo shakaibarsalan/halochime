@@ -799,7 +799,7 @@ export class TalkfrontWidget extends HTMLElement {
   private upsertSegment(seg: Segment): void {
     const wasNear = this.nearBottom();
     if (seg.speaker === "visitor") {
-      if (isLiveCaption(seg.id)) this.speech.live(seg.id, seg.text, seg.final);
+      if (isLiveCaption(seg.id)) this.speech.live(seg.id, seg.text, seg.final, seg.english === true);
       else this.speech.transcript(seg.id, seg.text, seg.final);
       this.scrollToEnd(wasNear);
       return;

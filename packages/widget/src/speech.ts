@@ -20,6 +20,14 @@ export function wordsOf(text: string): string[] {
   return text.toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
 }
 
+/** The script most of a text's letters are in: "latin", "other" (Urdu, Hindi...), or null when mixed or empty. */
+export function mainScript(text: string): "latin" | "other" | null {
+  const letters = text.match(/\p{L}/gu) ?? [];
+  if (!letters.length) return null;
+  const latin = letters.filter((c) => /\p{Script=Latin}/u.test(c)).length / letters.length;
+  return latin >= 0.6 ? "latin" : latin <= 0.4 ? "other" : null;
+}
+
 /** Shared words between two texts, from 0 to 1 (of the longer one). */
 export function wordOverlap(a: string, b: string): number {
   const wa = wordsOf(a);
@@ -41,6 +49,8 @@ export interface SpeechPart<V> {
   awaiting: boolean;
   /** The transcript segment now shown instead of the live words. */
   transcriptId: string | null;
+  /** Speech to text surely heard these live words as English. */
+  english: boolean;
   /** Last change: the wait for a transcript counts from here. */
   updatedAt: number;
 }
@@ -77,11 +87,13 @@ export class VisitorSpeech<V> {
   }
 
   /** Live words of caption `id`: everything heard in that caption turn so far. */
-  live(id: string, text: string, final: boolean): void {
+  live(id: string, text: string, final: boolean, english = false): void {
     const known = this.parts.get(id);
     // Once the transcript is in, later live words of the same part are not needed.
     if (known?.transcriptId) return;
-    this.update(known ?? this.addPart(id, true), text, !final);
+    const part = known ?? this.addPart(id, true);
+    part.english = english;
+    this.update(part, text, !final);
   }
 
   /** The model's transcript of segment `id` (interim, then final): it takes the place of the live words it belongs to. */
@@ -95,6 +107,12 @@ export class VisitorSpeech<V> {
       part = this.claimAwaiting(text) ?? this.addPart(id, false);
       part.transcriptId = id;
       this.parts.set(id, part);
+    }
+    // An accented English speaker's transcript can come out in Urdu script ("Okay, goodbye" as
+    // "اوکے، گڈ بائے", 5 Nov): when the live words were surely English, they stay.
+    if (part.english && mainScript(part.text) === "latin" && mainScript(text) === "other") {
+      this.update(part, part.text, false);
+      return;
     }
     this.update(part, text, !final);
   }
@@ -155,7 +173,16 @@ export class VisitorSpeech<V> {
       bubble = { view, parts: [] };
       this.bubbles.set(view, bubble);
     }
-    const part: SpeechPart<V> = { id, bubble, text: "", interim: false, awaiting, transcriptId: null, updatedAt: this.now() };
+    const part: SpeechPart<V> = {
+      id,
+      bubble,
+      text: "",
+      interim: false,
+      awaiting,
+      transcriptId: null,
+      english: false,
+      updatedAt: this.now(),
+    };
     bubble.parts.push(part);
     this.parts.set(id, part);
     if (awaiting) this.awaiting.push(part);

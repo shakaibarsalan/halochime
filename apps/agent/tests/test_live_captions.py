@@ -157,3 +157,25 @@ def test_words_from_before_the_agent_spoke_are_shown() -> None:
     c.agent_speaking(True, now=100.0)
     c.heard("and the price", True, began=97.0)  # the visitor's last words, reported late
     assert [p["text"] for p in sent] == ["and the price"]
+
+
+def test_a_turn_surely_heard_as_english_gives_its_words() -> None:
+    # 5 Nov: the realtime transcript wrote an accented "Okay, goodbye" in Urdu script.
+    c, sent = shown_captions()
+    c.heard("Okay,", True, language="en", confidence=0.93)
+    c.heard("goodbye.", True, language="en", confidence=0.9)
+    assert c.english_text(0) == "Okay, goodbye."
+    assert sent[-1]["en"] is True
+
+
+def test_unsure_or_other_language_turns_give_nothing() -> None:
+    c, sent = shown_captions()
+    c.heard("Theek hai shukriya", True, language="en", confidence=0.41)  # Urdu heard as made-up English
+    assert c.english_text(0) is None
+    assert "en" not in sent[-1]
+    c.committed()
+    c.heard("बहुत अच्छा", True, language="hi", confidence=0.95)
+    assert c.english_text(1) is None
+    c.committed()
+    c.heard("Okay", True, language="en", confidence=0.99)  # one word is too little to go by
+    assert c.english_text(2) is None
