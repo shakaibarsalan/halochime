@@ -66,8 +66,12 @@ class LiveCaptions:
         keyterms: list[str],
         on_final: Callable[[str], None] | None = None,
         is_echo: Callable[..., bool] | None = None,
+        frames: asyncio.Queue[rtc.AudioFrame] | None = None,
     ) -> None:
         self._room = room
+        # The visitor's audio with the agent's echo taken out (aec.py), when the server does that;
+        # else the microphone track as it comes.
+        self._frames = frames
         # Called with the turn's words so far each time Deepgram finalises some (prefetches knowledge).
         self._on_final = on_final
         # The agent's own voice from the visitor's speakers is not shown as their words.
@@ -198,14 +202,23 @@ class LiveCaptions:
 
     async def _run(self, participant: rtc.RemoteParticipant) -> None:
         try:
-            track = await self._track(participant)
-            audio = rtc.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
+            audio: rtc.AudioStream | None = None
+            if self._frames is None:
+                track = await self._track(participant)
+                audio = rtc.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
             stream = self._stt.stream()
 
             # Deepgram's timestamps count from the first audio pushed.
             audio_started: dict[str, float | None] = {"t": None}
 
             async def pump() -> None:
+                if audio is None:
+                    assert self._frames is not None
+                    while True:
+                        frame = await self._frames.get()
+                        if audio_started["t"] is None:
+                            audio_started["t"] = time.time()
+                        stream.push_frame(frame)
                 async for ev in audio:
                     if audio_started["t"] is None:
                         audio_started["t"] = time.time()
@@ -234,7 +247,8 @@ class LiveCaptions:
             finally:
                 pumping.cancel()
                 await stream.aclose()
-                await audio.aclose()
+                if audio is not None:
+                    await audio.aclose()
         except asyncio.CancelledError:
             raise
         except Exception as e:  # captions are a nicety: never take the call down with them

@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 import numpy as np
 
+from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -55,6 +56,7 @@ from .api import (
     parse_dispatch_metadata,
 )
 from . import greeting_cache
+from . import aec
 from .echo import EchoGuard, began_at, spoken_duration
 from .lifecycle import EndReason, HandoffDraft, OnceGuard, TurnCounter
 from .live_captions import TOPIC_REPLY_CUT, LiveCaptions, send_json
@@ -998,6 +1000,17 @@ async def entrypoint(ctx: JobContext) -> None:
         return
 
     transcript.start()
+    # Voice: take the agent's own voice out of the visitor's microphone (aec.py) before voice detection,
+    # speech to text, the realtime model and live captions hear it.
+    echo_free: aec.EchoCancelledInput | None = None
+    if runtime.mode == "voice" and aec.enabled() and session.input.audio is not None and session.output.audio is not None:
+        try:
+            canceller = aec.EchoCanceller()
+            session.output.audio = aec.EchoReferenceOutput(session.output.audio, canceller)
+            echo_free = aec.EchoCancelledInput(session.input.audio, canceller)
+            session.input.audio = echo_free
+        except Exception as e:
+            logger.warning("echo cancellation not started: %s", e)
     if realtime and realtime_turn_spec() == "livekit" and not gate_interruptions(session, echo):
         logger.warning("interruption gate not installed: the agent's echo may cut its replies")
 
@@ -1020,12 +1033,17 @@ async def entrypoint(ctx: JobContext) -> None:
 
     if realtime:
         stt_language = runtime.agent.stt.language
+        caption_frames: asyncio.Queue[rtc.AudioFrame] | None = None
+        if echo_free is not None:
+            caption_frames = asyncio.Queue()
+            echo_free.listeners.append(caption_frames.put_nowait)
         captions = LiveCaptions(
             ctx.room,
             language=stt_language,
             keyterms=list(runtime.agent.voice.vocabulary) if stt_language.startswith("en") else [],
             on_final=agent.prefetch_knowledge,
             is_echo=echo.is_echo,
+            frames=caption_frames,
         )
         try:
             captions.start(session.room_io.linked_participant)  # type: ignore[arg-type]
