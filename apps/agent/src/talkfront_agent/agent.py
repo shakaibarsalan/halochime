@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import dataclasses
 import logging
@@ -276,6 +277,8 @@ AUTO_KNOWLEDGE_NOTE = (
 )
 
 
+# end_call: the visitor's words from the second speech to text (Deepgram) this recent count too.
+HEARD_FOR_GOODBYE_S = 8.0
 # Realtime: a sentence of the agent's own echo with no visitor words for this long means the
 # microphone audio held for the model is only echo, and is dropped.
 ECHO_CLEAR_AFTER_S = 2.0
@@ -316,6 +319,14 @@ class TalkfrontAgent(Agent):
         self.on_echo: Callable[[], None] | None = None
         # Visitor message -> results. Preemptive attempts and tool steps of one turn reuse the search.
         self._knowledge: dict[str, asyncio.Task[str | None]] = {}
+        # The visitor's final words from speech to text (not echo), with when they came: (time, text).
+        self._heard: collections.deque[tuple[float, str]] = collections.deque(maxlen=20)
+
+    def heard_recently(self, seconds: float) -> str:
+        """The visitor's words from speech to text over the last `seconds` (a second opinion on the
+        realtime model's transcript: 5 Nov, "bye" was transcribed "But" and the goodbye was refused)."""
+        cutoff = time.time() - seconds
+        return " ".join(text for at, text in self._heard if at >= cutoff)
 
     def _knowledge_for(self, text: str) -> asyncio.Task[str | None]:
         key = " ".join(text.lower().split())
@@ -405,6 +416,8 @@ class TalkfrontAgent(Agent):
                         )
                     continue
                 interim_passed = ev.type != stt.SpeechEventType.FINAL_TRANSCRIPT
+                if final and alt.text.strip():
+                    self._heard.append((time.time(), alt.text.strip()))
                 why = self._echo.explain(alt.text, **timing)
                 if why is not None:
                     logger.info("visitor words near the agent's speech (%s): %s", ev.type.value, why)
@@ -934,8 +947,11 @@ async def entrypoint(ctx: JobContext) -> None:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(transcript_arrived.wait(), END_CALL_TRANSCRIPT_WAIT_S)
         # Models sometimes end a call on "Hi, can you hear me?": only end after the visitor's own goodbye.
-        # The goodbye may be one turn back ("thank you so much" ... "so the call never ends?").
-        if not sounds_like_goodbye(last_visitor_text["text"], last_visitor_text["previous"]):
+        # The goodbye may be one turn back ("thank you so much" ... "so the call never ends?"), or only in
+        # the other speech to text's words (the model's transcript said "But" for "bye").
+        if not sounds_like_goodbye(
+            last_visitor_text["text"], last_visitor_text["previous"], agent.heard_recently(HEARD_FOR_GOODBYE_S)
+        ):
             logger.info("end_call refused: the visitor did not say goodbye")
             return "Not ended: the visitor has not said goodbye. Don't end the conversation; answer what they said."
         if goodbye_is_doubtful(last_visitor_text["text"]) and end_call_doubted_at_turn != turns.user_turns:

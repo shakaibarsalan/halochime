@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from talkfront_agent import agent as agent_mod
@@ -93,3 +95,12 @@ def test_a_lone_bye_after_a_long_message_is_doubtful() -> None:
     assert not doubtful("Okay thank you so much for explaining all of that to me, bye.")  # thanks too
     assert not doubtful("Alright that is everything I needed to know about the pricing, goodbye!")
     assert not doubtful("What does your product do for small shops in the city and how much is it?")
+
+
+def test_goodbye_heard_by_the_other_speech_to_text_counts() -> None:
+    # 5 Nov: the realtime transcript said "But" for "bye"; Deepgram's words are a second opinion.
+    agent = agent_mod.TalkfrontAgent(instructions="x")
+    agent._heard.append((time.time() - 30, "okay goodbye"))  # too old to count
+    agent._heard.append((time.time() - 2, "bye"))
+    assert agent.heard_recently(agent_mod.HEARD_FOR_GOODBYE_S) == "bye"
+    assert agent_mod.sounds_like_goodbye("But", "", agent.heard_recently(agent_mod.HEARD_FOR_GOODBYE_S))

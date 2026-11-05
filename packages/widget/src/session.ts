@@ -84,22 +84,30 @@ export function warmUpConnection(url: string): void {
   }
 }
 
+/** Microphones whose opening moves the sound to a headset call (Bluetooth hands-free). */
+const BLUETOOTH_MIC = /bluetooth|airpods|buds|hands-?free|\bbt\b/i;
 /**
- * Calls `onChange` with whether this page may use the microphone without asking, now and whenever that
- * changes. Browsers without the Permissions API (or without "microphone" in it) never call it.
+ * How long the sound takes to settle after the microphone opens. Phones switch to call audio, and
+ * Bluetooth headsets from music to hands-free (a second or two of nothing): a greeting started before
+ * that lost its first words (5 Nov, a phone). Desktops without Bluetooth don't switch.
  */
-export function watchMicPermission(onChange: (allowed: boolean) => void): void {
-  try {
-    const query = navigator.permissions?.query({ name: "microphone" as PermissionName });
-    void query
-      ?.then((status) => {
-        onChange(status.state === "granted");
-        status.addEventListener("change", () => onChange(status.state === "granted"));
-      })
-      .catch(() => undefined);
-  } catch {
-    // not supported: the greeting then waits for the visitor's "allow"
+export async function audioSettleMs(mic: LocalAudioTrack): Promise<number> {
+  let bluetooth = BLUETOOTH_MIC.test(mic.mediaStreamTrack.label);
+  if (!bluetooth) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      bluetooth = devices.some((d) => d.kind === "audioinput" && BLUETOOTH_MIC.test(d.label));
+    } catch {
+      // can't tell: decide by the kind of device
+    }
   }
+  if (bluetooth) return 1800;
+  try {
+    if (window.matchMedia("(pointer: coarse)").matches) return 700;
+  } catch {
+    // ignore
+  }
+  return 0;
 }
 
 /** Ask for the microphone up front, before a conversation (and credit) is created on the server. */

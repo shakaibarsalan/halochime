@@ -52,6 +52,8 @@ SOUND_RMS = 0.01
 # Lining up must be this clear (correlation) to move the reference: real echo matched 0.71 to 0.98, and
 # a visitor with no echo once matched 0.56 by chance.
 MIN_CORRELATION = 0.65
+# Two measurements in a row agree when this close (100 ms).
+AGREE_CHUNKS = 10
 # Moves smaller than this are left to the canceller (it reaches about 0.5 s; each move makes it adapt again).
 MIN_SHIFT_CHUNKS = 15
 # Agent audio waiting to be played is capped (a long reply pushed ahead of real time).
@@ -84,6 +86,8 @@ class EchoCanceller:
         # The canceller failed once: from then on the audio only changes rate.
         self.failed = False
         self.measured_ms: int | None = None
+        # A delay measured once and waiting for the next measurement to agree before the reference moves.
+        self._candidate: int | None = None
 
     # --- the agent's side ---------------------------------------------------------------------
 
@@ -185,6 +189,12 @@ class EchoCanceller:
                 best, best_lag = corr, lag
         if best < MIN_CORRELATION:
             return
+        # Speech has a rhythm, so a wrong delay can line up once (a phone call measured 1320, 480, 1080
+        # and 570 ms in a row, and each move made the canceller start over): two in a row must agree.
+        candidate, self._candidate = self._candidate, best_lag
+        if candidate is None or abs(best_lag - candidate) > AGREE_CHUNKS:
+            return
+        best_lag = (best_lag + candidate) // 2
         self.measured_ms = best_lag * 10
         target = best_lag - TARGET_DELAY_MS // 10 if best_lag * 10 > HOLD_BACK_AFTER_MS else 0
         if abs(target - self.delay_chunks) >= MIN_SHIFT_CHUNKS:
