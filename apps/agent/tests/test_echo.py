@@ -125,6 +125,34 @@ def test_echo_of_the_first_words_timed_slightly_early_still_counts() -> None:
     assert guard.is_echo("yes talkfront can recognize", started_at=started - 0.2, duration=1.0)
 
 
+def test_echo_timed_early_by_a_busy_server_still_counts() -> None:
+    # 5 Nov: the agent's goodbye came back word for word, timed 1.5 s before the agent began speaking.
+    clock = Clock()
+    guard = EchoGuard(clock=clock)
+    guard.set_agent_speaking(True)
+    began_speaking = clock.t
+    guard.agent_said("Thanks for staying with me. I'm glad you shared this.")
+    clock.t += 3
+    assert guard.is_echo("thanks for staying with me", started_at=began_speaking - 1.5, duration=1.4)
+    # A short reply or the visitor's own words that early are still theirs.
+    assert not guard.is_echo("thanks", started_at=began_speaking - 1.5, duration=0.4)
+    assert not guard.is_echo("can you stay with me on this", started_at=began_speaking - 1.5, duration=1.4)
+    # Said long ago: not echo whatever the timing.
+    guard.set_agent_speaking(False)
+    clock.t += 20
+    guard.set_agent_speaking(True)
+    assert not guard.is_echo("thanks for staying with me", started_at=clock.t - 1.5, duration=1.4)
+
+
+def test_talking_over_the_agent_is_reported() -> None:
+    guard, _ = guard_speaking()
+    calls: list[int] = []
+    guard.talked_over()  # nobody listening: nothing happens
+    guard.on_talked_over = lambda: calls.append(1)
+    guard.talked_over()
+    assert calls == [1]
+
+
 def test_nothing_is_echo_before_the_agent_said_anything() -> None:
     guard = EchoGuard()
     guard.set_agent_speaking(True)

@@ -81,3 +81,15 @@ def test_end_call_counts_requests_to_end_and_the_previous_turn() -> None:
     assert say("so the conversation doesn't end?")
     assert say("Okay, sure.", "Okay, thank you so much.")
     assert not say("How do I end a subscription?", "Hello")
+
+
+def test_a_lone_bye_after_a_long_message_is_doubtful() -> None:
+    # 5 Nov: "...it can automatically start being showing. So, why?" was heard as "So, bye." and the call ended.
+    doubtful = agent_mod.goodbye_is_doubtful
+    assert doubtful(
+        "This sentence I cannot pronounce it, but at the start of message it can automatically start showing. So, bye."
+    )
+    assert not doubtful("Okay, bye.")  # short: a goodbye
+    assert not doubtful("Okay thank you so much for explaining all of that to me, bye.")  # thanks too
+    assert not doubtful("Alright that is everything I needed to know about the pricing, goodbye!")
+    assert not doubtful("What does your product do for small shops in the city and how much is it?")

@@ -107,3 +107,53 @@ def test_played_seconds_of_a_cut_reply() -> None:
     assert reply_played_s({"started_speaking_at": 100.0, "stopped_speaking_at": 101.234}) == 1.23
     assert reply_played_s({"started_speaking_at": 100.0}) is None
     assert reply_played_s(None) is None
+
+
+def shown_captions() -> tuple[LiveCaptions, list[dict[str, object]]]:
+    import asyncio
+
+    c = captions()
+    c._on_final = None
+    c._outbox = asyncio.Queue()
+    sent: list[dict[str, object]] = []
+    real_put = c._outbox.put_nowait
+
+    def put(payload: dict[str, object]) -> None:
+        sent.append(payload)
+        real_put(payload)
+
+    c._outbox.put_nowait = put  # type: ignore[method-assign]
+    return c, sent
+
+
+def test_words_heard_while_the_agent_speaks_are_dropped_when_it_finishes() -> None:
+    # 5 Nov: the agent's voice, misheard, showed as the visitor's words and stayed in front of their next words.
+    c, sent = shown_captions()
+    c.agent_speaking(True, now=100.0)
+    c.heard("I have totally had", True, began=101.0)
+    assert sent == []  # held while the agent speaks
+    c.agent_speaking(False, now=104.0)
+    c.heard("okay", True, began=104.5)  # its last words' echo, reported late: dropped too
+    assert sent == []
+    c.heard("can you hear me", True, began=107.0)  # the visitor, after the agent finished
+    assert sent == [{"text": "can you hear me", "final": True, "turn": 0}]
+
+
+def test_held_words_show_when_the_visitor_talks_over_the_agent() -> None:
+    c, sent = shown_captions()
+    c.agent_speaking(True, now=100.0)
+    c.heard("wait", False, began=102.0)
+    c.heard("wait a second", True, began=102.0)
+    c.talked_over()
+    assert [p["text"] for p in sent] == ["wait", "wait a second"]
+    c.heard("how much is it", True, began=103.0)  # after the talk over: shown at once
+    c.agent_speaking(False, now=103.5)
+    c.heard("per month", True, began=104.0)
+    assert [p["text"] for p in sent][-2:] == ["wait a second how much is it", "wait a second how much is it per month"]
+
+
+def test_words_from_before_the_agent_spoke_are_shown() -> None:
+    c, sent = shown_captions()
+    c.agent_speaking(True, now=100.0)
+    c.heard("and the price", True, began=97.0)  # the visitor's last words, reported late
+    assert [p["text"] for p in sent] == ["and the price"]

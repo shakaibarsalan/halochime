@@ -12,6 +12,7 @@ import {
   type AgentActivity,
   type Segment,
   type SessionEvents,
+  watchMicPermission,
 } from "./session";
 import { cutReplyGoes, cutReplyIndex, VisitorSpeech } from "./speech";
 import { STYLES } from "./styles";
@@ -134,6 +135,13 @@ export class TalkfrontWidget extends HTMLElement {
   private localGreetingPlaying = false;
   /** The visitor's mic stays silent while that greeting plays, so the agent never hears it as their words. */
   private greetingMic: LocalAudioTrack | null = null;
+  /**
+   * The page may use the microphone without asking. Only then does the greeting start in the tap itself;
+   * otherwise it waits for the visitor's "allow" (5 Nov: the agent talking while the browser still asked
+   * for the microphone felt wrong).
+   */
+  private micAllowed = false;
+  private micWatched = false;
   private conversationHasContent = false;
   /** After a failed start, typing no longer auto-connects until the visitor presses Send or Retry. */
   private prewarmBlocked = false;
@@ -311,6 +319,10 @@ export class TalkfrontWidget extends HTMLElement {
       this.mode = config.modes.includes("voice") ? "voice" : config.modes[0]!;
       this.applyTheme(config);
       this.preloadGreeting(config);
+      if (config.modes.includes("voice") && !this.micWatched) {
+        this.micWatched = true;
+        watchMicPermission((allowed) => (this.micAllowed = allowed));
+      }
       this.clearNotice();
       this.launcher.hidden = this.isOpen;
       if (config.livekitUrl) warmUpConnection(config.livekitUrl);
@@ -638,6 +650,7 @@ export class TalkfrontWidget extends HTMLElement {
     };
     audio.onended = done;
     audio.onerror = done;
+    audio.muted = false;
     audio.currentTime = 0;
     this.localGreetingPlaying = true;
     this.render();
@@ -652,6 +665,28 @@ export class TalkfrontWidget extends HTMLElement {
         return false;
       },
     );
+  }
+
+  /**
+   * Lets the greeting play after the microphone prompt. Browsers allow sound only in a tap (Safari: per
+   * audio element), so the element is started here, muted, and paused at once.
+   */
+  private unlockGreeting(): void {
+    const audio = this.greetingAudio;
+    if (!audio || !this.greetingReady || this.localGreetingPlaying) return;
+    const settle = () => {
+      if (!this.localGreetingPlaying) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      audio.muted = false;
+    };
+    try {
+      audio.muted = true;
+      audio.play().then(settle, () => (audio.muted = false));
+    } catch {
+      audio.muted = false;
+    }
   }
 
   private stopLocalGreeting(): void {
@@ -905,16 +940,20 @@ export class TalkfrontWidget extends HTMLElement {
 
     let session: Session | null = null;
     try {
-      // Voice: the greeting starts now, in the tap itself (browsers allow sound then), while the
-      // microphone and the call get ready.
-      const greeting = mode === "voice" ? this.playLocalGreeting() : null;
+      // Voice: with the microphone already allowed, the greeting starts now, in the tap itself (browsers
+      // allow sound then), while the call gets ready. Otherwise it waits for the visitor's "allow".
+      const greetNow = mode === "voice" && this.micAllowed;
+      let greeting = greetNow ? this.playLocalGreeting() : null;
+      if (mode === "voice" && !greetNow) this.unlockGreeting();
       // Voice: ask for the microphone before creating the conversation, so a "no" costs nothing.
       const mic = mode === "voice" ? await openMicrophone() : null;
+      if (mic) this.micAllowed = true;
       if (!isCurrent()) {
         mic?.stop();
         this.stopLocalGreeting();
         return null;
       }
+      if (mic && !greetNow) greeting = this.playLocalGreeting();
       const greetingPlayed = greeting ? await greeting : false;
       if (mic && this.localGreetingPlaying) {
         mic.mediaStreamTrack.enabled = false;

@@ -515,6 +515,8 @@ def gate_interruptions(session: AgentSession, echo: EchoGuard) -> bool:
             last["reason"] = reason
         if speaking and reason == "loud":
             stopped_for_loudness["at"] = time.time()
+        if speaking and reason:
+            echo.talked_over()
         if not speaking or has_words or loud:
             original()
         if report:
@@ -669,6 +671,17 @@ def sounds_like_goodbye(*texts: str) -> bool:
     return any(_GOODBYE_WORDS.search(t or "") for t in texts)
 
 
+# A message longer than this that ends in a lone "bye" is not clearly a goodbye.
+DOUBTFUL_BYE_MIN_WORDS = 9
+
+
+def goodbye_is_doubtful(text: str) -> bool:
+    """A long message whose only goodbye word is "bye": speech to text often hears "why" as "bye"
+    (5 Nov: a visitor explaining a problem ended "...so, why?", heard as "So, bye.", and the call ended)."""
+    cues = [m.group(0).lower() for m in _GOODBYE_WORDS.finditer(text or "")]
+    return bool(cues) and all(c == "bye" for c in cues) and len(re.findall(r"[\w']+", text)) >= DOUBTFUL_BYE_MIN_WORDS
+
+
 # How long the visitor must be silent before speech counts as paused (silero default 0.55 s).
 # The turn detector then decides whether they are done, so this can be short.
 VAD_MIN_SILENCE_S = 0.3
@@ -682,7 +695,11 @@ def prewarm(proc: JobProcess) -> None:
 # shutdown_process_timeout: the final flush + /end need a few seconds after the room closes.
 # Starting a job process (plugins, onnxruntime, Silero) can take over 10 s on Windows; the default
 # 10 s initialize timeout made the first spawn fail and retry.
-server = AgentServer(setup_fnc=prewarm, shutdown_process_timeout=25.0, initialize_process_timeout=30.0)
+# load_threshold: LiveKit's 0.7 marked this 2-core server "full" during a single call's CPU spikes (5 Nov),
+# and a visitor tapping Talk then would wait for a worker; there is only one.
+server = AgentServer(
+    setup_fnc=prewarm, shutdown_process_timeout=25.0, initialize_process_timeout=30.0, load_threshold=0.9
+)
 
 
 # LIVEKIT_AGENT_NAME lets a dev worker share a LiveKit project with production without taking its calls.
@@ -904,9 +921,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
     draft = HandoffDraft(turns)
     end_call_blocked_at_turn = -1
+    end_call_doubted_at_turn = -1
 
     async def _end_call(ctx: RunContext) -> str:
-        nonlocal end_call_blocked_at_turn
+        nonlocal end_call_blocked_at_turn, end_call_doubted_at_turn
         # A message the visitor wanted to leave must not be lost: refuse once per visitor turn while
         # it is prepared but unsent. If they say they don't want it, the next call ends the conversation.
         # Realtime: the words that prompted this may not be transcribed yet; give them a moment.
@@ -918,6 +936,14 @@ async def entrypoint(ctx: JobContext) -> None:
         if not sounds_like_goodbye(last_visitor_text["text"], last_visitor_text["previous"]):
             logger.info("end_call refused: the visitor did not say goodbye")
             return "Not ended: the visitor has not said goodbye. Don't end the conversation; answer what they said."
+        if goodbye_is_doubtful(last_visitor_text["text"]) and end_call_doubted_at_turn != turns.user_turns:
+            end_call_doubted_at_turn = turns.user_turns
+            logger.info("end_call refused: a lone 'bye' after a long message may be 'why'")
+            return (
+                "Not ended: their message ended in a lone \"bye\", which is often a misheard \"why\". Don't say "
+                "goodbye. Answer what they said (if they were asking why, explain), then ask if there's anything "
+                "else. If they then say goodbye, end the call."
+            )
         if draft.pending and end_call_blocked_at_turn != turns.user_turns:
             end_call_blocked_at_turn = turns.user_turns
             logger.info("end_call refused: a prepared message is not sent yet")
@@ -1003,8 +1029,10 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         try:
             captions.start(session.room_io.linked_participant)  # type: ignore[arg-type]
-            if captions._task is not None:
-                background.append(captions._task)
+            background.extend(t for t in (captions._task, captions._sender) if t is not None)
+            # Words heard while the agent speaks wait until the visitor talks over it (else they were its echo).
+            session.on("agent_state_changed", lambda ev: captions.agent_speaking(ev.new_state == "speaking"))
+            echo.on_talked_over = captions.talked_over
             # A caption turn ends exactly when the model gets that audio as a message, so caption turn n
             # and the model's transcript n are the same words (one visitor bubble, parts in order).
             on_audio_commit(

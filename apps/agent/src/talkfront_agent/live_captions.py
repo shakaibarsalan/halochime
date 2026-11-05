@@ -10,6 +10,12 @@ The model writes its transcript once per message: each time the visitor's held a
 (LiveKit's end of turn, a pause of 0.6 s or more). So captions are numbered by those commits, and
 caption turn n is exactly the words of the model's message that will hold them. The widget then puts
 each transcript in place of its own caption, however many pauses a long stretch of speech has.
+
+Words heard while the agent is speaking wait. Its own voice from the visitor's speakers, misheard by
+speech to text, gets past the echo filter (5 Nov: "I have totally had okay" and "supporting" showed as
+the visitor's words). Held words are shown once the visitor talks over the agent and it stops for
+them; if it finishes its sentence instead, they were its echo and are dropped. A visitor who spoke
+softly without stopping it still gets their words on screen from the model's transcript.
 """
 
 from __future__ import annotations
@@ -33,6 +39,12 @@ TOPIC_LIVE_CAPTION = "tf.live_caption"
 # Voice calls: a reply the visitor talked over, stopped part way (JSON {text, played_s}), for display only.
 TOPIC_REPLY_CUT = "tf.reply_cut"
 SAMPLE_RATE = 16000
+# Words that began this long before the agent's speech, or this long after it, count as heard during it:
+# a busy server times words up to about 1.5 s early, and the echo of its last words arrives late.
+HOLD_LEAD_S = 1.5
+HOLD_LAG_S = 1.0
+# Without audio timestamps, words are placed this long before they arrived (speech to text delay).
+STT_DELAY_S = 0.4
 
 
 async def send_json(room: rtc.Room, identity: str | None, topic: str, payload: dict[str, object]) -> None:
@@ -71,6 +83,8 @@ class LiveCaptions:
             keyterm=keyterms if keyterms else NOT_GIVEN,
         )
         self._task: asyncio.Task[None] | None = None
+        self._sender: asyncio.Task[None] | None = None
+        self._outbox: asyncio.Queue[dict[str, object]] | None = None
         self._visitor: str | None = None
         self._init_turns()
 
@@ -86,9 +100,62 @@ class LiveCaptions:
         # A sentence shown with interim words whose final words had not come yet.
         self._sentence_open = False
         self._last_sentence_of_old_turn = False
+        # The agent's current or latest speech: [start, end (None while speaking), visitor talked over].
+        self._speech: list[float | bool | None] | None = None
+        # Words heard during the current speech, waiting to be shown or dropped: (text, final).
+        self._held: list[tuple[str, bool]] = []
+
+    def agent_speaking(self, speaking: bool, *, now: float | None = None) -> None:
+        """The agent started or stopped speaking. Held words go when it finishes on its own."""
+        at = time.time() if now is None else now
+        current = self._speech is not None and self._speech[1] is None
+        if speaking and not current:
+            self._speech = [at, None, False]
+            self._held.clear()
+        elif not speaking and current:
+            assert self._speech is not None
+            self._speech[1] = at
+            if not self._speech[2]:
+                self._held.clear()  # it finished its sentence: what was heard was its echo
+
+    def talked_over(self) -> None:
+        """The visitor talked over the agent and it stops for them: the held words are theirs."""
+        if self._speech is None or self._speech[1] is not None:
+            return
+        self._speech[2] = True
+        held, self._held = self._held, []
+        for text, final in held:
+            self._show(text, final)
+
+    def heard(self, text: str, final: bool, *, began: float | None = None, duration: float = 0.0) -> None:
+        """Words that are not the agent's echo by their wording: shown now, held, or dropped."""
+        at = began if began is not None else time.time() - duration - STT_DELAY_S
+        speech = self._speech
+        if speech is not None and not speech[2]:
+            start, end = speech[0], speech[1]
+            assert isinstance(start, float)
+            if at >= start - HOLD_LEAD_S and (end is None or at <= float(end) + HOLD_LAG_S):
+                if end is None:
+                    self._held.append((text, final))
+                return  # heard during a sentence the agent finished: its echo
+        self._show(text, final)
+
+    def _show(self, text: str, final: bool) -> None:
+        turn = self._turn_for(final)
+        self._sentence_open = not final
+        shown = " ".join([*self._finals, text])
+        if final:
+            self._finals.append(text)
+            if self._on_final is not None:
+                with contextlib.suppress(Exception):
+                    self._on_final(" ".join(self._finals))
+        if self._outbox is not None:
+            self._outbox.put_nowait({"text": shown, "final": final, "turn": turn})
 
     def start(self, participant: rtc.RemoteParticipant) -> None:
         self._visitor = participant.identity
+        self._outbox = asyncio.Queue()
+        self._sender = asyncio.create_task(self._send_all(), name="talkfront_live_captions_send")
         self._task = asyncio.create_task(self._run(participant), name="talkfront_live_captions")
 
     def committed(self) -> None:
@@ -116,10 +183,11 @@ class LiveCaptions:
         return self._turn
 
     async def aclose(self) -> None:
-        if self._task:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._task
+        for task in (self._task, self._sender):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
 
     async def _track(self, participant: rtc.RemoteParticipant) -> rtc.Track:
         while True:
@@ -153,23 +221,16 @@ class LiveCaptions:
                         continue
                     final = ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
                     alt = ev.alternatives[0]
+                    began, duration = began_at(alt, audio_started["t"]), spoken_duration(alt)
                     if self._is_echo is not None and self._is_echo(
-                        text, final=final, started_at=began_at(alt, audio_started["t"]), duration=spoken_duration(alt)
+                        text, final=final, started_at=began, duration=duration
                     ):
                         if final:
                             # That sentence is over: no final words of it are still to come.
                             self._sentence_open = False
                             self._last_sentence_of_old_turn = False
                         continue
-                    turn = self._turn_for(final)
-                    self._sentence_open = not final
-                    shown = " ".join([*self._finals, text])
-                    if final:
-                        self._finals.append(text)
-                        if self._on_final is not None:
-                            with contextlib.suppress(Exception):
-                                self._on_final(" ".join(self._finals))
-                    await self._send(shown, final, turn)
+                    self.heard(text, final, began=began, duration=duration)
             finally:
                 pumping.cancel()
                 await stream.aclose()
@@ -179,5 +240,9 @@ class LiveCaptions:
         except Exception as e:  # captions are a nicety: never take the call down with them
             logger.warning("live captions stopped: %s", type(e).__name__)
 
-    async def _send(self, text: str, final: bool, turn: int) -> None:
-        await send_json(self._room, self._visitor, TOPIC_LIVE_CAPTION, {"text": text, "final": final, "turn": turn})
+    async def _send_all(self) -> None:
+        """Sends captions one at a time, in order (words shown by talked_over come from an event handler)."""
+        assert self._outbox is not None
+        while True:
+            payload = await self._outbox.get()
+            await send_json(self._room, self._visitor, TOPIC_LIVE_CAPTION, payload)

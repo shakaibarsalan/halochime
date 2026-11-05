@@ -84,6 +84,24 @@ export function warmUpConnection(url: string): void {
   }
 }
 
+/**
+ * Calls `onChange` with whether this page may use the microphone without asking, now and whenever that
+ * changes. Browsers without the Permissions API (or without "microphone" in it) never call it.
+ */
+export function watchMicPermission(onChange: (allowed: boolean) => void): void {
+  try {
+    const query = navigator.permissions?.query({ name: "microphone" as PermissionName });
+    void query
+      ?.then((status) => {
+        onChange(status.state === "granted");
+        status.addEventListener("change", () => onChange(status.state === "granted"));
+      })
+      .catch(() => undefined);
+  } catch {
+    // not supported: the greeting then waits for the visitor's "allow"
+  }
+}
+
 /** Ask for the microphone up front, before a conversation (and credit) is created on the server. */
 export async function openMicrophone(): Promise<LocalAudioTrack> {
   try {

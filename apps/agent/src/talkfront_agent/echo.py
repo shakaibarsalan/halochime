@@ -95,6 +95,15 @@ HELD_AUDIO_ECHO_AFTER_S = 1.0
 # Loud speech that turned out to be echo raises the bar by this much (up to LOUD_MAX_PENALTY).
 LOUD_PENALTY_STEP = 1.6
 LOUD_MAX_PENALTY = 10.0
+# A busy server handles the microphone audio late, so speech to text timestamps put words seconds
+# early (5 Nov: the agent's own goodbye, word for word, "began" 1.5 s before it spoke, passed as the
+# visitor, cut the goodbye and became a "visitor" turn the model heard as German). Words that repeat
+# what the agent said just now are its echo even when timed this much before its speech began ...
+ECHO_DRIFT_S = 3.0
+# ... when nearly all of them repeat it, there are a few of them, and the agent said them this recently.
+ECHO_DRIFT_COVERAGE = 0.9
+ECHO_DRIFT_MIN_WORDS = 3
+ECHO_DRIFT_SAID_S = 10.0
 
 def _words(text: str) -> list[str]:
     """Words, keeping vowel signs: a plain regex word split cuts Hindi "मासिक" into "म", "स", "क"
@@ -164,6 +173,8 @@ class EchoGuard:
         self._loud_heard_at = -1e9
         self._loud_penalty = 1.0
         self._maybe_visitor_at = -1e9
+        # Called when the visitor talks over the agent and it is let stop (see gate_interruptions).
+        self.on_talked_over: Callable[[], None] | None = None
 
     @property
     def agent_speaking(self) -> bool:
@@ -184,10 +195,15 @@ class EchoGuard:
         """No real visitor words since the agent last started speaking."""
         return not self._speeches or self.last_visitor_words_at < (self._speeches[-1][0] or 0.0)
 
-    def _during_agent_speech(self, started_at: float, lag: float = ECHO_LAG_S) -> bool:
+    def talked_over(self) -> None:
+        """The visitor talked over the agent and it was let stop."""
+        if self.on_talked_over is not None:
+            self.on_talked_over()
+
+    def _during_agent_speech(self, started_at: float, lag: float = ECHO_LAG_S, lead: float = ECHO_LEAD_S) -> bool:
         for start, end in reversed(self._speeches):
             assert start is not None
-            if start - ECHO_LEAD_S <= started_at and (end is None or started_at <= end + lag):
+            if start - lead <= started_at and (end is None or started_at <= end + lag):
                 return True
             if end is not None and end + lag < started_at:
                 return False  # older turns ended even earlier
@@ -297,7 +313,7 @@ class EchoGuard:
             return False
         began = self._began_at(started_at, duration)
         if not self._during_agent_speech(began):
-            return False
+            return self._late_timed_echo(heard, words, began)
         said = self._recent_said()
         if not said:
             return False
@@ -318,6 +334,15 @@ class EchoGuard:
             return coverage >= INTERIM_HOLD_COVERAGE
         needed = LOOSE_SHARED_WORDS if script_of(heard) == "LATIN" else LOOSE_SHARED_WORDS_NON_LATIN
         return coverage >= LOOSE_COVERAGE and shared >= needed
+
+    def _late_timed_echo(self, heard: str, words: list[str], began: float) -> bool:
+        """Words timed before the agent's speech that still repeat what it said just now (see ECHO_DRIFT_S).
+        Late timing needs no such rule: audio timestamps already place late words where they were spoken."""
+        if len(words) < ECHO_DRIFT_MIN_WORDS or not self._during_agent_speech(began, lead=ECHO_DRIFT_S):
+            return False
+        cutoff = self._clock() - ECHO_DRIFT_SAID_S
+        said = "".join(chunk for at, chunk in self._said if at >= cutoff)
+        return bool(said) and echo_coverage(heard, said) >= ECHO_DRIFT_COVERAGE
 
     def explain(
         self, heard: str, *, started_at: float | None = None, duration: float = 0.0
