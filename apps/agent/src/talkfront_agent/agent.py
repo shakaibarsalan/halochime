@@ -933,7 +933,10 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.speech_handle.add_done_callback(
             lambda _: asyncio.get_running_loop().call_later(GOODBYE_GRACE_S, session.shutdown)
         )
-        return "Say a short, warm goodbye in one sentence."
+        return (
+            "Say a short, warm goodbye in one sentence, the way a person would (for example: \"Thanks for "
+            "calling, have a great day!\"). Don't talk about ending, closing or sending off the call."
+        )
 
     end_call = function_tool(
         _end_call,
