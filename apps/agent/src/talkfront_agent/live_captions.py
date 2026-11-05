@@ -5,6 +5,11 @@ their words late. This runs Deepgram streaming speech to text on the visitor's m
 for display and sends the words as they come on TOPIC_LIVE_CAPTION. The widget shows them in the
 visitor's bubble and swaps in the realtime model's own (more accurate, any language) transcript
 when it arrives. Nothing here feeds the model or the saved transcript.
+
+The model writes its transcript once per message: each time the visitor's held audio is committed
+(LiveKit's end of turn, a pause of 0.6 s or more). So captions are numbered by those commits, and
+caption turn n is exactly the words of the model's message that will hold them. The widget then puts
+each transcript in place of its own caption, however many pauses a long stretch of speech has.
 """
 
 from __future__ import annotations
@@ -25,7 +30,19 @@ from .echo import began_at, spoken_duration
 logger = logging.getLogger("talkfront.live_captions")
 
 TOPIC_LIVE_CAPTION = "tf.live_caption"
+# Voice calls: a reply the visitor talked over, stopped part way (JSON {text, played_s}), for display only.
+TOPIC_REPLY_CUT = "tf.reply_cut"
 SAMPLE_RATE = 16000
+
+
+async def send_json(room: rtc.Room, identity: str | None, topic: str, payload: dict[str, object]) -> None:
+    """Sends a small JSON message to the visitor alone. Display niceties: a failure is ignored."""
+    if not identity:
+        return
+    with contextlib.suppress(Exception):
+        await room.local_participant.send_text(
+            json.dumps(payload), topic=topic, destination_identities=[identity]
+        )
 
 
 class LiveCaptions:
@@ -53,12 +70,18 @@ class LiveCaptions:
             smart_format=True,
             keyterm=keyterms if keyterms else NOT_GIVEN,
         )
-        self._finals: list[str] = []
         self._task: asyncio.Task[None] | None = None
         self._visitor: str | None = None
-        # Each visitor turn gets a number, so the widget puts its words in that turn's bubble even
-        # when the visitor goes on talking before the agent answers.
+        self._init_turns()
+
+    def _init_turns(self) -> None:
+        self._finals: list[str] = []
+        # Each visitor turn gets a number, so the widget puts its words in that turn's part of their
+        # bubble, and the model's transcript of that turn in its place.
         self._turn = 0
+        # The visitor's audio committed to the model so far, one message each. Caption turn n holds the
+        # words of the message made by the next commit after n commits.
+        self._commits = 0
         self._turn_over = False
         # A sentence shown with interim words whose final words had not come yet.
         self._sentence_open = False
@@ -68,9 +91,13 @@ class LiveCaptions:
         self._visitor = participant.identity
         self._task = asyncio.create_task(self._run(participant), name="talkfront_live_captions")
 
-    def end_turn(self) -> None:
-        """The visitor's turn is over: words heard from now on belong to their next turn, except
-        the final words of a sentence they were finishing."""
+    def committed(self) -> None:
+        """The visitor's held audio went to the model as one message: words heard from now on belong
+        to the next one, except the final words of a sentence they were finishing (its audio was in
+        this message). Called at the commit itself, not when the agent starts answering: realtime
+        replies rarely say "thinking", and a reply resumed after a false interruption says
+        "speaking" again, so the agent's state drifted away from the model's messages."""
+        self._commits += 1
         if not self._turn_over:
             self._turn_over = True
             self._last_sentence_of_old_turn = self._sentence_open
@@ -82,7 +109,9 @@ class LiveCaptions:
                 return self._turn
             self._turn_over = False
             self._last_sentence_of_old_turn = False
-            self._turn += 1
+            # The message these words go into. Commits that had no caption words (the visitor's words
+            # all taken as echo, say) still had a message and a transcript, so their numbers are skipped.
+            self._turn = self._commits
             self._finals.clear()
         return self._turn
 
@@ -128,7 +157,9 @@ class LiveCaptions:
                         text, final=final, started_at=began_at(alt, audio_started["t"]), duration=spoken_duration(alt)
                     ):
                         if final:
+                            # That sentence is over: no final words of it are still to come.
                             self._sentence_open = False
+                            self._last_sentence_of_old_turn = False
                         continue
                     turn = self._turn_for(final)
                     self._sentence_open = not final
@@ -149,11 +180,4 @@ class LiveCaptions:
             logger.warning("live captions stopped: %s", type(e).__name__)
 
     async def _send(self, text: str, final: bool, turn: int) -> None:
-        if not self._visitor:
-            return
-        with contextlib.suppress(Exception):
-            await self._room.local_participant.send_text(
-                json.dumps({"text": text, "final": final, "turn": turn}),
-                topic=TOPIC_LIVE_CAPTION,
-                destination_identities=[self._visitor],
-            )
+        await send_json(self._room, self._visitor, TOPIC_LIVE_CAPTION, {"text": text, "final": final, "turn": turn})

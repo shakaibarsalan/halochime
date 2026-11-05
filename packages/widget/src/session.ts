@@ -14,6 +14,7 @@ import {
 import {
   TOPIC_CHAT,
   TOPIC_LIVE_CAPTION,
+  TOPIC_REPLY_CUT,
   TOPIC_TRANSCRIPTION,
   type ConversationMode,
   type WidgetSessionResponse,
@@ -36,11 +37,21 @@ export interface Segment {
 
 export type EndReason = "local" | "remote" | "connection_lost";
 
+/** An agent reply the visitor talked over, stopped part way. */
+export interface ReplyCut {
+  /** What of it was spoken (and shown). */
+  text: string;
+  /** Seconds of its voice the visitor heard, when the agent knows. */
+  playedS: number | null;
+}
+
 export interface SessionEvents {
   activity(state: AgentActivity): void;
   segment(segment: Segment): void;
   /** Removes a caption that ended up empty. */
   dropSegment(id: string): void;
+  /** Voice: an agent reply already on screen was cut off by the visitor. */
+  replyCut(cut: ReplyCut): void;
   audioBlocked(blocked: boolean): void;
   /** Voice: the visitor's mic has stayed silent while the agent waits for them (true), or not any more. */
   micSilent(silent: boolean): void;
@@ -177,7 +188,7 @@ export class Session {
     this.silenceWatch?.stop();
     this.silenceWatch = null;
     this.flushAgentWaiters();
-    for (const topic of [TOPIC_TRANSCRIPTION, TOPIC_LIVE_CAPTION]) {
+    for (const topic of [TOPIC_TRANSCRIPTION, TOPIC_LIVE_CAPTION, TOPIC_REPLY_CUT]) {
       try {
         this.room.unregisterTextStreamHandler(topic);
       } catch {
@@ -235,6 +246,11 @@ export class Session {
     // Realtime voices: the visitor's words while they speak. The model's own transcript replaces them.
     room.registerTextStreamHandler(TOPIC_LIVE_CAPTION, (reader) => {
       void this.readLiveCaption(reader);
+    });
+
+    // Voice: a reply the visitor talked over stopped part way; the widget marks it (or takes it away).
+    room.registerTextStreamHandler(TOPIC_REPLY_CUT, (reader) => {
+      void this.readReplyCut(reader);
     });
 
     room.on(RoomEvent.ParticipantConnected, (p) => this.considerAgent(p));
@@ -417,6 +433,24 @@ export class Session {
         this.visitorHeard();
         this.on.segment({ id: `${LIVE_CAPTION_ID}:${turn}`, speaker: "visitor", text, final: msg.final === true });
       }
+    } catch {
+      // not ours
+    }
+  }
+
+  private async readReplyCut(reader: TextStreamReader): Promise<void> {
+    let raw = "";
+    try {
+      raw = await reader.readAll();
+    } catch {
+      return;
+    }
+    if (this.closed) return;
+    try {
+      const msg = JSON.parse(raw) as { text?: unknown; played_s?: unknown };
+      const text = typeof msg.text === "string" ? msg.text : "";
+      const playedS = typeof msg.played_s === "number" && Number.isFinite(msg.played_s) ? msg.played_s : null;
+      if (text.trim()) this.on.replyCut({ text, playedS });
     } catch {
       // not ours
     }

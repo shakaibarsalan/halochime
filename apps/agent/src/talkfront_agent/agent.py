@@ -57,7 +57,7 @@ from .api import (
 from . import greeting_cache
 from .echo import EchoGuard, began_at, spoken_duration
 from .lifecycle import EndReason, HandoffDraft, OnceGuard, TurnCounter
-from .live_captions import LiveCaptions
+from .live_captions import TOPIC_REPLY_CUT, LiveCaptions, send_json
 from .tools import build_tools, search_formatted
 from .transcript import TranscriptBuffer, describe_tool_call
 
@@ -534,6 +534,35 @@ def gate_interruptions(session: AgentSession, echo: EchoGuard) -> bool:
     return True
 
 
+def on_audio_commit(rt_session: llm.RealtimeSession, callback: Callable[[], None], *, server_turns: bool) -> None:
+    """Calls `callback` each time the visitor's held audio goes to the realtime model as one message
+    (the model transcribes each one). LiveKit's turn detection sends it with commit_audio; with
+    OpenAI's own turn detection the server commits when it hears the visitor stop."""
+    if server_turns:
+        rt_session.on("input_speech_stopped", lambda _ev: callback())
+        return
+    original = rt_session.commit_audio
+
+    def commit_audio() -> None:
+        held = getattr(rt_session, "_pushed_duration_s", None)
+        original()
+        # The plugin sends nothing while under 100 ms of audio is held: then no message is made.
+        if held is None or getattr(rt_session, "_pushed_duration_s", None) != held:
+            with contextlib.suppress(Exception):  # never break the turn over a display nicety
+                callback()
+
+    rt_session.commit_audio = commit_audio  # type: ignore[method-assign]
+
+
+def reply_played_s(metrics: llm.chat_context.MetricsReport | None) -> float | None:
+    """Seconds of a reply's voice the visitor heard, when LiveKit measured it."""
+    started = (metrics or {}).get("started_speaking_at")
+    stopped = (metrics or {}).get("stopped_speaking_at")
+    if isinstance(started, (int, float)) and isinstance(stopped, (int, float)) and stopped >= started:
+        return round(stopped - started, 2)
+    return None
+
+
 def build_session(runtime: RuntimeConfig, proc: JobProcess, *, realtime: bool = False) -> AgentSession:
     agent_cfg = runtime.agent
     if realtime:
@@ -802,11 +831,36 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.info("realtime reply started %.0f ms after the turn ended", (time.monotonic() - done) * 1000)
             agent.turn_done_at = None
 
+    # Notices to the widget still being sent (kept so they are not garbage collected half way).
+    notices: set[asyncio.Task[None]] = set()
+
+    def _show_reply_cut(item: llm.ChatMessage) -> None:
+        """The visitor talked over this reply and it stopped part way. Its bubble looked like any
+        finished reply, so the next one read as the agent changing its mind mid-sentence: tell the
+        widget, which marks it as cut or takes it away when it was barely heard."""
+        text = (item.text_content or "").strip()
+        try:
+            visitor = session.room_io.linked_participant
+        except Exception:
+            visitor = None
+        if not text or visitor is None:
+            return
+        payload: dict[str, object] = {"text": text}
+        played = reply_played_s(item.metrics)
+        if played is not None:
+            payload["played_s"] = played
+        task = asyncio.ensure_future(send_json(ctx.room, visitor.identity, TOPIC_REPLY_CUT, payload))
+        notices.add(task)
+        task.add_done_callback(notices.discard)
+
     @session.on("conversation_item_added")
     def _on_item(ev: ConversationItemAddedEvent) -> None:
         item = ev.item
         if isinstance(item, llm.ChatMessage) and item.role in ("user", "assistant"):
             _touch(by_user=item.role == "user")
+            # Voice only: replies are shown as they are spoken, so a cut one stops on screen too.
+            if item.role == "assistant" and item.interrupted and runtime.mode == "voice":
+                _show_reply_cut(item)
             if item.role == "user":
                 turns.user_turn()
                 last_visitor_text["previous"] = last_visitor_text["text"]
@@ -948,12 +1002,11 @@ async def entrypoint(ctx: JobContext) -> None:
             captions.start(session.room_io.linked_participant)  # type: ignore[arg-type]
             if captions._task is not None:
                 background.append(captions._task)
-
-            @session.on("agent_state_changed")
-            def _on_agent_state(ev) -> None:  # type: ignore[no-untyped-def]
-                # The visitor's turn was taken (thinking) or answered: their next words are a new turn.
-                if ev.new_state in ("thinking", "speaking"):
-                    captions.end_turn()
+            # A caption turn ends exactly when the model gets that audio as a message, so caption turn n
+            # and the model's transcript n are the same words (one visitor bubble, parts in order).
+            on_audio_commit(
+                agent.realtime_llm_session, captions.committed, server_turns=realtime_turn_spec() != "livekit"
+            )
         except Exception as e:
             logger.warning("live captions not started: %s", type(e).__name__)
 

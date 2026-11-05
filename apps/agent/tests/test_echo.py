@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from talkfront_agent.echo import ECHO_LAG_S, STT_DELAY_S, EchoGuard, echo_coverage, script_of
-from talkfront_agent.live_captions import LiveCaptions
 
 SAID = (
     "Yes. Talkfront can recognize the visitor's language automatically, with the default realtime voices. "
@@ -130,25 +129,6 @@ def test_nothing_is_echo_before_the_agent_said_anything() -> None:
     guard = EchoGuard()
     guard.set_agent_speaking(True)
     assert not guard.is_echo("hello can you hear me", duration=1.0)
-
-
-def test_captions_number_turns_and_keep_a_finishing_sentence_in_its_turn() -> None:
-    captions = LiveCaptions.__new__(LiveCaptions)  # no Deepgram connection needed for the turn logic
-    captions._finals = ["first words"]
-    captions._turn = 0
-    captions._turn_over = False
-    captions._sentence_open = True  # an interim was shown, its final not yet in
-    captions._last_sentence_of_old_turn = False
-
-    captions.end_turn()
-    assert captions._turn_for(final=True) == 0  # the final words of that sentence
-    assert captions._finals == ["first words"]
-    assert captions._turn_for(final=False) == 1  # the visitor speaks again: next turn
-    assert captions._finals == []
-
-    captions._sentence_open = False
-    captions.end_turn()
-    assert captions._turn_for(final=True) == 2  # nothing was open: a new sentence, a new turn
 
 
 def _tone(rms: float, seconds: float = 0.1, rate: int = 16000):  # type: ignore[no-untyped-def]

@@ -13,6 +13,7 @@ import {
   type Segment,
   type SessionEvents,
 } from "./session";
+import { cutReplyGoes, cutReplyIndex, VisitorSpeech } from "./speech";
 import { STYLES } from "./styles";
 import { getVisitorId } from "./visitor";
 
@@ -103,41 +104,11 @@ function pageInfo(): { url: string; title?: string } {
   return title ? { url, title } : { url };
 }
 
-interface VisitorTurn {
-  li: HTMLLIElement;
-  /** Segment id -> latest text, in arrival order. */
-  texts: Map<string, string>;
-  /** Segments still interim. */
-  pending: Set<string>;
-  /** When the bubble appeared (for giving up on a transcript that never comes). */
-  startedAt: number;
-}
-
-/** A spoken turn shown from live captions waits at most this long for its real transcript. */
-const TRANSCRIPT_WAIT_MS = 30_000;
-/** Share of shared words for a transcript to belong to a waiting bubble that is not the oldest. */
-const MATCH_MIN_OVERLAP = 0.4;
+/** A cut reply whose words are not on screen yet is looked for once more after this long. */
+const CUT_RETRY_MS = 1_500;
 
 function isLiveCaption(id: string): boolean {
   return id === LIVE_CAPTION_ID || id.startsWith(`${LIVE_CAPTION_ID}:`);
-}
-
-function hasTranscript(turn: VisitorTurn): boolean {
-  return [...turn.texts.keys()].some((k) => k !== LIVE_CAPTION_ID);
-}
-
-function wordsOf(text: string): string[] {
-  // Vowel signs (\p{M}) belong to the word: without them Hindi words fall apart into letters.
-  return text.toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
-}
-
-/** Shared words between two texts, from 0 to 1 (of the longer one). */
-function wordOverlap(a: string, b: string): number {
-  const wa = wordsOf(a);
-  const wb = wordsOf(b);
-  if (!wa.length || !wb.length) return 0;
-  const set = new Set(wa);
-  return wb.filter((w) => set.has(w)).length / Math.max(wa.length, wb.length);
 }
 
 export class TalkfrontWidget extends HTMLElement {
@@ -167,18 +138,30 @@ export class TalkfrontWidget extends HTMLElement {
   /** After a failed start, typing no longer auto-connects until the visitor presses Send or Retry. */
   private prewarmBlocked = false;
 
+  /** Agent replies still being spoken, by segment id. */
   private bubbles = new Map<string, HTMLLIElement>();
-  /** The visitor's current spoken turn: all its caption segments share one bubble. */
-  private visitorTurn: VisitorTurn | null = null;
   /**
-   * Realtime voices: turns shown from live captions, oldest first, still waiting for the model's own
-   * transcript. That transcript often arrives after the agent has started answering, so it must go
-   * into the bubble it belongs to, not into a new bubble below the answer (which showed every visitor
-   * message twice).
+   * The visitor's spoken words: one bubble per stretch of speech (until the agent answers), each live
+   * caption a part of it that the model's own transcript replaces in place. That transcript often
+   * arrives after the agent has started answering, so it must go into the part it belongs to, not into
+   * a new bubble below the answer (which showed visitor messages twice).
    */
-  private awaitingTranscript: VisitorTurn[] = [];
-  /** Which bubble a real transcript segment went into, so its updates land there too. */
-  private segmentTurns = new Map<string, VisitorTurn>();
+  private speech = new VisitorSpeech<HTMLLIElement>({
+    add: () => this.addBubble("visitor", ""),
+    show: (li, text, interim) => {
+      li.lastChild!.textContent = text;
+      li.classList.toggle("interim", interim);
+      li.setAttribute("aria-busy", String(interim));
+    },
+    remove: (li) => li.remove(),
+    last: () => this.lastItem(),
+  });
+  /** Agent bubble -> its segment id, so a cut reply taken away gets no more updates. */
+  private replySegments = new WeakMap<HTMLLIElement, string>();
+  /** Segments of agent replies taken away (cut off almost at once): later updates are ignored. */
+  private removedReplies = new Set<string>();
+  /** Cut replies whose words were not on screen yet, looked for again shortly. */
+  private cutRetries = new Set<number>();
   private typingEl: HTMLLIElement | null = null;
 
   // DOM (created in build()).
@@ -786,40 +769,25 @@ export class TalkfrontWidget extends HTMLElement {
   }
 
   /**
-   * Live captions. Speech to text sends a visitor's turn as several segments (one per short pause),
-   * so everything the visitor says until the agent answers goes into one bubble. Agent replies keep
-   * one bubble per segment, updated in place until final.
+   * Live captions and transcripts. The visitor's words go into one bubble per stretch of speech (see
+   * VisitorSpeech). Agent replies keep one bubble per segment, updated in place until final.
    */
   private upsertSegment(seg: Segment): void {
     const wasNear = this.nearBottom();
     if (seg.speaker === "visitor") {
-      const live = isLiveCaption(seg.id);
-      const turn = live ? this.liveCaptionTurn(seg.id) : this.transcriptTurn(seg.id, seg.text);
-      if (!turn) return;
-      if (live) {
-        turn.texts.set(LIVE_CAPTION_ID, seg.text);
-      } else {
-        turn.texts.delete(LIVE_CAPTION_ID);
-        turn.pending.delete(LIVE_CAPTION_ID);
-        turn.texts.set(seg.id, seg.text);
-        this.segmentTurns.set(seg.id, turn);
-      }
-      const key = live ? LIVE_CAPTION_ID : seg.id;
-      if (seg.final) turn.pending.delete(key);
-      else turn.pending.add(key);
-      this.renderVisitorTurn(turn);
+      if (isLiveCaption(seg.id)) this.speech.live(seg.id, seg.text, seg.final);
+      else this.speech.transcript(seg.id, seg.text, seg.final);
       this.scrollToEnd(wasNear);
       return;
     }
-    this.visitorTurn = null;
+    if (this.removedReplies.has(seg.id)) return;
     let li = this.bubbles.get(seg.id);
     if (!li) {
       li = this.addBubble(seg.speaker, seg.text);
       this.bubbles.set(seg.id, li);
-    } else if (seg.speaker === "agent") {
-      renderRich(li.lastChild as HTMLElement, seg.text);
+      this.replySegments.set(li, seg.id);
     } else {
-      li.lastChild!.textContent = seg.text;
+      renderRich(li.querySelector<HTMLElement>(".body")!, seg.text);
     }
     li.classList.toggle("interim", !seg.final);
     li.setAttribute("aria-busy", String(!seg.final));
@@ -827,101 +795,67 @@ export class TalkfrontWidget extends HTMLElement {
     this.scrollToEnd(wasNear);
   }
 
-  /** The open visitor bubble at the end of the log, if the visitor is the last one talking. */
-  private openVisitorTurn(): VisitorTurn | null {
-    const turn = this.visitorTurn;
-    // The typing dots always sit at the end of the log, so look at the item before them.
-    const last = this.typingEl?.isConnected ? this.typingEl.previousElementSibling : this.log.lastElementChild;
-    return turn && last === turn.li ? turn : null;
-  }
-
-  private newVisitorTurn(): VisitorTurn {
-    const turn: VisitorTurn = { li: this.addBubble("visitor", ""), texts: new Map(), pending: new Set(), startedAt: Date.now() };
-    this.visitorTurn = turn;
-    return turn;
-  }
-
-  /**
-   * Live words of one visitor turn: that turn's bubble, or a new one that waits for the real
-   * transcript. Once the transcript is in, later live words of the same turn are not needed.
-   */
-  private liveCaptionTurn(id: string): VisitorTurn | null {
-    const known = this.segmentTurns.get(id);
-    if (known) return known.li.isConnected && !hasTranscript(known) ? known : null;
-    const turn = this.newVisitorTurn();
-    this.awaitingTranscript.push(turn);
-    this.segmentTurns.set(id, turn);
-    return turn;
-  }
-
-  /**
-   * A real transcript: its earlier bubble, else the waiting bubble whose live words it matches
-   * (oldest first when none match clearly), else the open one.
-   */
-  private transcriptTurn(id: string, text: string): VisitorTurn {
-    const known = this.segmentTurns.get(id);
-    if (known?.li.isConnected) return known;
-    const now = Date.now();
-    this.awaitingTranscript = this.awaitingTranscript.filter((turn) => {
-      if (!turn.li.isConnected) return false;
-      if (now - turn.startedAt <= TRANSCRIPT_WAIT_MS) return true;
-      // Gave up waiting: the live words stay as they are.
-      turn.pending.clear();
-      this.renderVisitorTurn(turn);
-      return false;
-    });
-    if (this.awaitingTranscript.length) {
-      let best = 0;
-      let bestScore = 0;
-      this.awaitingTranscript.forEach((turn, i) => {
-        const score = wordOverlap(turn.texts.get(LIVE_CAPTION_ID) ?? "", text);
-        if (score > bestScore) [best, bestScore] = [i, score];
-      });
-      if (bestScore < MATCH_MIN_OVERLAP) best = 0;
-      // Waiting bubbles before the match got no transcript of their own: keep their live words.
-      for (const skipped of this.awaitingTranscript.splice(0, best)) {
-        skipped.pending.clear();
-        this.renderVisitorTurn(skipped);
-      }
-      return this.awaitingTranscript.shift()!;
-    }
-    return this.openVisitorTurn() ?? this.newVisitorTurn();
-  }
-
-  private renderVisitorTurn(turn: VisitorTurn): void {
-    const text = [...turn.texts.values()].map((t) => t.trim()).filter(Boolean).join(" ");
-    turn.li.lastChild!.textContent = text;
-    turn.li.classList.toggle("interim", turn.pending.size > 0);
-    turn.li.setAttribute("aria-busy", String(turn.pending.size > 0));
+  /** The last item in the conversation. The typing dots always sit at the end, so the one before them. */
+  private lastItem(): Element | null {
+    return this.typingEl?.isConnected ? this.typingEl.previousElementSibling : this.log.lastElementChild;
   }
 
   private dropSegment(id: string): void {
-    const turn = this.segmentTurns.get(id) ?? (this.visitorTurn?.texts.has(id) ? this.visitorTurn : null);
-    if (turn?.texts.has(id)) {
-      turn.texts.delete(id);
-      turn.pending.delete(id);
-      this.segmentTurns.delete(id);
-      if (turn.texts.size === 0) {
-        turn.li.remove();
-        if (this.visitorTurn === turn) this.visitorTurn = null;
-      } else {
-        this.renderVisitorTurn(turn);
-      }
-      return;
-    }
+    if (this.speech.drop(id)) return;
     this.bubbles.get(id)?.remove();
     this.bubbles.delete(id);
   }
 
-  /** The conversation is over: nothing more will arrive for the visitor bubbles. */
-  private resetVisitorTurns(): void {
-    for (const turn of new Set([...this.awaitingTranscript, ...this.segmentTurns.values(), ...(this.visitorTurn ? [this.visitorTurn] : [])])) {
-      turn.pending.clear();
-      if (turn.li.isConnected) this.renderVisitorTurn(turn);
+  /**
+   * The visitor talked over a reply and it stopped part way. Heard for under 2 s or only a few words:
+   * it goes, and the visitor's bubbles on both sides of it become one again. Otherwise it stays, marked
+   * as cut, so the next reply doesn't read as the agent changing its mind mid-sentence.
+   */
+  private markReplyCut(text: string, playedS: number | null, retried = false): void {
+    // The latest replies on screen not marked yet (the typing dots are not one).
+    const replies = [...this.log.querySelectorAll<HTMLLIElement>("li.msg.agent:not(.typing):not(.cut)")].slice(-3);
+    const found = cutReplyIndex(replies.map((li) => li.querySelector(".body")?.textContent ?? ""), text);
+    if (found < 0 && !retried) {
+      // Its words may not be on screen yet: look once more in a moment.
+      const timer = window.setTimeout(() => {
+        this.cutRetries.delete(timer);
+        this.markReplyCut(text, playedS, true);
+      }, CUT_RETRY_MS);
+      this.cutRetries.add(timer);
+      return;
     }
-    this.awaitingTranscript = [];
-    this.segmentTurns.clear();
-    this.visitorTurn = null;
+    const li = found >= 0 ? replies[found] : replies[replies.length - 1];
+    if (!li) return;
+    if (cutReplyGoes(text, playedS)) {
+      this.removeReply(li);
+      return;
+    }
+    li.classList.add("cut");
+    li.append(
+      h("span", { class: "cut-mark" }, h("span", { "aria-hidden": "true" }, "…"), h("span", { class: "sr-only" }, " (interrupted)")),
+    );
+  }
+
+  private removeReply(li: HTMLLIElement): void {
+    const seg = this.replySegments.get(li);
+    if (seg) {
+      this.bubbles.delete(seg);
+      this.removedReplies.add(seg);
+    }
+    const before = li.previousElementSibling;
+    const after = li.nextElementSibling;
+    li.remove();
+    // The visitor's words on both sides of it were one stretch of speech. With nothing after it yet,
+    // the bubble before it is the last item again, so their next words join it.
+    this.speech.merge(before, after);
+  }
+
+  /** The conversation is over: nothing more will arrive for the visitor's bubbles or cut replies. */
+  private resetSpeech(): void {
+    this.speech.reset();
+    for (const timer of this.cutRetries) clearTimeout(timer);
+    this.cutRetries.clear();
+    this.removedReplies.clear();
   }
 
   private setTyping(on: boolean): void {
@@ -1045,6 +979,9 @@ export class TalkfrontWidget extends HTMLElement {
       dropSegment: (id) => {
         if (isMine()) this.dropSegment(id);
       },
+      replyCut: ({ text, playedS }) => {
+        if (isMine()) this.markReplyCut(text, playedS);
+      },
       audioBlocked: (blocked) => {
         if (!isMine()) return;
         if (blocked) {
@@ -1067,7 +1004,7 @@ export class TalkfrontWidget extends HTMLElement {
         this.starting = null;
         this.setTyping(false);
         this.bubbles.clear();
-        this.resetVisitorTurns();
+        this.resetSpeech();
         this.addDivider("Conversation ended");
         if (reason === "connection_lost") this.showError(new WidgetError("network"));
         this.render();
@@ -1087,7 +1024,7 @@ export class TalkfrontWidget extends HTMLElement {
     this.setTyping(false);
     for (const li of this.bubbles.values()) li.classList.remove("interim");
     this.bubbles.clear();
-    this.resetVisitorTurns();
+    this.resetSpeech();
     if ((session || wasStarting) && divider) this.addDivider(divider);
     this.render();
     if (session) await session.end();

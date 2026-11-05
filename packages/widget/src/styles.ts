@@ -326,6 +326,8 @@ button:disabled { cursor: default; }
 .msg.interim { opacity: 0.72; }
 .msg.agent.interim { border-style: dashed; border-color: var(--tf-border); color: var(--tf-muted); }
 .msg.visitor.interim { box-shadow: none; }
+/* A reply the visitor talked over, stopped part way: still readable, a little quieter (theme tokens, so light and dark). */
+.msg.agent.cut { color: var(--tf-muted); }
 .msg.typing { display: inline-flex; align-items: center; gap: 5px; padding: 13px 15px; }
 .msg.typing span {
   width: 7px; height: 7px; border-radius: 50%; background: var(--tf-faint);

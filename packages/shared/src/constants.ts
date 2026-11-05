@@ -6,8 +6,13 @@ export const AGENT_NAME = "talkfront-agent";
 /** LiveKit text-stream topics used between the widget and the voice agent. */
 export const TOPIC_CHAT = "lk.chat";
 export const TOPIC_TRANSCRIPTION = "lk.transcription";
-/** Realtime voice calls: the visitor's words while they speak (JSON {text, final}), for display only. */
+/**
+ * Realtime voice calls: the visitor's words while they speak (JSON {text, final, turn}), for display only.
+ * `turn` n holds the words of the model's n-th message (counted from 0), whose transcript replaces them.
+ */
 export const TOPIC_LIVE_CAPTION = "tf.live_caption";
+/** Voice calls: an agent reply the visitor talked over, stopped part way (JSON {text, played_s}), for display only. */
+export const TOPIC_REPLY_CUT = "tf.reply_cut";
 
 /** error.code values returned by the public widget API. */
 export const WIDGET_ERROR_CODES = [
