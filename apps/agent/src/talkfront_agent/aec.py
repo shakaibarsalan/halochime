@@ -14,6 +14,11 @@ down to 0, the visitor's words intact, for echo arriving up to about 0.5 s after
 Real echo comes back later than that (the room's send buffer, the network both ways, the browser's
 buffers, Bluetooth), so the reference is held back to match: the delay is measured by lining up the
 loudness of the agent's audio with the loudness of the microphone, while the agent talks.
+
+Until the delay is known, the microphone audio goes on unchanged. Half-cancelled echo is worse than
+none: it comes out garbled ("Kruv.", "Spruce supported"), and the echo filter that compares words
+with what the agent said (echo.py) no longer recognises it. The canceller's audio is used from a
+moment after each confirmed delay, once it has adapted.
 """
 
 from __future__ import annotations
@@ -52,10 +57,14 @@ SOUND_RMS = 0.01
 # Lining up must be this clear (correlation) to move the reference: real echo matched 0.71 to 0.98, and
 # a visitor with no echo once matched 0.56 by chance.
 MIN_CORRELATION = 0.65
+# A match this clear needs no second measurement.
+SURE_CORRELATION = 0.9
 # Two measurements in a row agree when this close (100 ms).
 AGREE_CHUNKS = 10
 # Moves smaller than this are left to the canceller (it reaches about 0.5 s; each move makes it adapt again).
 MIN_SHIFT_CHUNKS = 15
+# After the reference moves, the canceller adapts for this long before its audio is used (1.5 s).
+CONVERGE_CHUNKS = 150
 # Agent audio waiting to be played is capped (a long reply pushed ahead of real time).
 MAX_PENDING_CHUNKS = 100 * 120
 
@@ -88,6 +97,13 @@ class EchoCanceller:
         self.measured_ms: int | None = None
         # A delay measured once and waiting for the next measurement to agree before the reference moves.
         self._candidate: int | None = None
+        # The chunk from which the canceller's audio is used; None until a delay is confirmed.
+        self._engage_at: int | None = None
+
+    @property
+    def engaged(self) -> bool:
+        """The visitor's audio goes on with the echo taken out (else unchanged)."""
+        return self._engage_at is not None and self._chunks >= self._engage_at
 
     # --- the agent's side ---------------------------------------------------------------------
 
@@ -151,9 +167,11 @@ class EchoCanceller:
         while len(self._delay_line) > self.delay_chunks + 1:
             self._delay_line.popleft()
         late_reference = self._delay_line[0] if len(self._delay_line) > self.delay_chunks else np.zeros(CHUNK, dtype=np.int16)
-        frame = rtc.AudioFrame(near.tobytes(), RATE, 1, CHUNK)
+        raw = rtc.AudioFrame(near.tobytes(), RATE, 1, CHUNK)
         if self.failed:
-            return frame
+            return raw
+        # The canceller always runs (it keeps adapting); its audio is used once engaged.
+        frame = rtc.AudioFrame(near.tobytes(), RATE, 1, CHUNK)
         try:
             self._apm.process_reverse_stream(rtc.AudioFrame(late_reference.tobytes(), RATE, 1, CHUNK))
             self._apm.set_stream_delay_ms(TARGET_DELAY_MS)
@@ -161,8 +179,8 @@ class EchoCanceller:
         except Exception as e:  # never lose the visitor's audio over this
             self.failed = True
             logger.warning("echo cancellation stopped: %s", e)
-            return rtc.AudioFrame(near.tobytes(), RATE, 1, CHUNK)
-        return frame
+            return raw
+        return frame if self.engaged else raw
 
     def _measure_delay(self) -> None:
         """Lines up the agent's loudness with the microphone's to find how late its echo comes back."""
@@ -191,15 +209,28 @@ class EchoCanceller:
             return
         # Speech has a rhythm, so a wrong delay can line up once (a phone call measured 1320, 480, 1080
         # and 570 ms in a row, and each move made the canceller start over): two in a row must agree.
+        # A very clear match moves it at once: the first seconds of the agent's first answer are when
+        # uncancelled echo does the most harm (5 Nov: a made-up "That sounds good." cut that answer off).
         candidate, self._candidate = self._candidate, best_lag
-        if candidate is None or abs(best_lag - candidate) > AGREE_CHUNKS:
+        if best >= SURE_CORRELATION:
+            pass
+        elif candidate is None or abs(best_lag - candidate) > AGREE_CHUNKS:
             return
-        best_lag = (best_lag + candidate) // 2
+        else:
+            best_lag = (best_lag + candidate) // 2
         self.measured_ms = best_lag * 10
         target = best_lag - TARGET_DELAY_MS // 10 if best_lag * 10 > HOLD_BACK_AFTER_MS else 0
-        if abs(target - self.delay_chunks) >= MIN_SHIFT_CHUNKS:
-            logger.info("echo comes back %d ms late (match %.2f): reference held back %d ms", best_lag * 10, best, target * 10)
+        moved = abs(target - self.delay_chunks) >= MIN_SHIFT_CHUNKS
+        if moved:
             self.delay_chunks = target
+        if self._engage_at is None:
+            # Unchanged audio while the canceller first adapts. Later moves keep its audio: the delay
+            # wanders by a few hundred ms in a call, and unchanged audio each time let echo through.
+            self._engage_at = self._chunks + CONVERGE_CHUNKS
+        if moved or self._engage_at == self._chunks + CONVERGE_CHUNKS:
+            logger.info(
+                "echo comes back %d ms late (match %.2f): reference held back %d ms", best_lag * 10, best, self.delay_chunks * 10
+            )
 
 
 def _mono(frame: rtc.AudioFrame) -> np.ndarray:

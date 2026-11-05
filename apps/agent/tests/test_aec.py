@@ -58,3 +58,13 @@ def test_the_agent_cut_off_leaves_no_reference_behind() -> None:
     aec.agent_audio(rtc.AudioFrame(speechlike(2.0).tobytes(), R, 1, R * 2))
     aec.agent_cleared()
     assert aec._next_reference().any() == False  # noqa: E712
+
+
+def test_audio_goes_on_unchanged_until_the_delay_is_known() -> None:
+    # Half-cancelled echo comes out garbled and the word-based echo filter can't recognise it.
+    aec = EchoCanceller()
+    aec.agent_audio(rtc.AudioFrame(speechlike(2.0).tobytes(), R, 1, R * 2))
+    near = (speechlike(1.0, seed=3).astype(np.float64) * 0.3).astype(np.int16)
+    out = [aec.process(rtc.AudioFrame(near[i : i + 240].tobytes(), R, 1, 240)) for i in range(0, R, 240)]
+    assert not aec.engaged
+    assert 95 <= sum(len(frames) for frames in out) <= 100  # 1 s in, about 1 s out (10 ms frames)
