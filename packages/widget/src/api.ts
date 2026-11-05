@@ -116,6 +116,9 @@ function normalizeConfig(raw: Partial<WidgetConfigResponse>): WidgetConfigRespon
         : "light",
     },
     ...(typeof raw.livekitUrl === "string" && /^wss?:\/\//.test(raw.livekitUrl) ? { livekitUrl: raw.livekitUrl } : {}),
+    ...(typeof raw.greetingAudioUrl === "string" && /^https?:\/\//.test(raw.greetingAudioUrl)
+      ? { greetingAudioUrl: raw.greetingAudioUrl }
+      : {}),
     ...(typeof raw.iconUrl === "string" && /^https?:\/\//.test(raw.iconUrl) ? { iconUrl: raw.iconUrl } : {}),
     ...(raw.poweredBy && typeof raw.poweredBy.label === "string" && typeof raw.poweredBy.url === "string" &&
     /^https?:\/\//.test(raw.poweredBy.url)

@@ -66,6 +66,8 @@ class DispatchMetadata:
     agent_id: str
     organization_id: str
     mode: ConversationMode
+    # The widget already played the greeting (its own audio copy) while the call connected.
+    greeting_played: bool = False
 
 
 def parse_dispatch_metadata(raw: str | bytes | None) -> DispatchMetadata:
@@ -93,6 +95,7 @@ def parse_dispatch_metadata(raw: str | bytes | None) -> DispatchMetadata:
         agent_id=req_str("agentId"),
         organization_id=req_str("organizationId"),
         mode=cast(ConversationMode, mode),
+        greeting_played=data.get("greetingPlayed") is True,
     )
 
 

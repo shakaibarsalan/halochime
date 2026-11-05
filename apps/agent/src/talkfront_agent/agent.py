@@ -963,6 +963,18 @@ async def entrypoint(ctx: JobContext) -> None:
         # A text chat starts with the visitor's first message, and the widget already shows the
         # greeting above it. Saying it now would land after their question, so only record it.
         transcript.add("assistant", greeting, joined_at)
+    elif greeting and meta.greeting_played:
+        # The widget played this greeting from its own copy the moment the visitor tapped Talk (the call
+        # takes 2 to 5 s to connect). Don't say it again: record it and tell the model it was said.
+        transcript.add("assistant", greeting, joined_at)
+        said = agent.chat_ctx.copy()
+        said.add_message(role="assistant", content=greeting)
+        told = asyncio.ensure_future(agent.update_chat_ctx(said))
+        told.add_done_callback(
+            lambda t: t.cancelled()
+            or t.exception() is None
+            or logger.warning("model not told about the widget's greeting: %s", type(t.exception()).__name__)
+        )
     elif greeting:
         voice = runtime.agent.voice.realtime_voice
         audio = greeting_cache.cached(voice, greeting) if realtime else None

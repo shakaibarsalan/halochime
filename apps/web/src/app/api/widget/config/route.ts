@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { WidgetConfigResponse } from "@talkfront/shared";
 import { appUrl, livekitEnv } from "@/lib/env";
 import { preflight, resolveWidgetAgent } from "@/lib/widget/agent";
+import { greetingAudioUrl } from "@/lib/widget/greeting-audio";
 
 export async function GET(req: NextRequest) {
   const resolved = await resolveWidgetAgent(req, req.nextUrl.searchParams.get("key"));
@@ -20,6 +21,8 @@ export async function GET(req: NextRequest) {
       : {}),
     poweredBy: { label: "Halochime", url: appUrl() },
   };
+  const greetingAudio = greetingAudioUrl(agent);
+  if (greetingAudio) body.greetingAudioUrl = greetingAudio;
   headers.set("Cache-Control", "no-store");
   return NextResponse.json(body, { headers });
 }

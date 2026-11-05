@@ -52,6 +52,11 @@ export const WidgetConfigResponse = z.object({
   iconUrl: z.string().optional(),
   /** Small "by Halochime" line under the chat. Absent = no line. */
   poweredBy: z.object({ label: z.string(), url: z.string() }).optional(),
+  /**
+   * The greeting as audio (realtime voices only). The widget preloads it and plays it the moment the
+   * visitor taps Talk, while the call connects (2 to 5 s), then says greetingPlayed in the session request.
+   */
+  greetingAudioUrl: z.string().optional(),
 });
 export type WidgetConfigResponse = z.infer<typeof WidgetConfigResponse>;
 
@@ -62,6 +67,8 @@ export const WidgetSessionRequest = z.object({
   visitorId: z.string().max(100).optional(),
   /** HS256 token signed by the business's server so we know the logged-in user (IdentityTokenClaims). */
   identityToken: z.string().max(4096).optional(),
+  /** Voice: the widget already played the greeting from greetingAudioUrl, so the agent must not say it again. */
+  greetingPlayed: z.boolean().optional(),
   page: z
     .object({
       url: z.string().max(2048),
@@ -106,6 +113,8 @@ export const DispatchMetadata = z.object({
   agentId: z.string(),
   organizationId: z.string(),
   mode: ConversationMode,
+  /** The widget played the greeting itself (WidgetSessionRequest.greetingPlayed). */
+  greetingPlayed: z.boolean().optional(),
 });
 export type DispatchMetadata = z.infer<typeof DispatchMetadata>;
 

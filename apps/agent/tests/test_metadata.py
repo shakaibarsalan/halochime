@@ -17,6 +17,13 @@ def test_parses_dispatch_metadata():
     assert meta.agent_id == "agt_1"
     assert meta.organization_id == "org_1"
     assert meta.mode == "text"
+    assert meta.greeting_played is False
+
+
+def test_greeting_played_only_when_true():
+    assert parse_dispatch_metadata(_meta(greetingPlayed=True)).greeting_played is True
+    assert parse_dispatch_metadata(_meta(greetingPlayed="yes")).greeting_played is False
+    assert parse_dispatch_metadata(_meta(greetingPlayed=False)).greeting_played is False
 
 
 @pytest.mark.parametrize(

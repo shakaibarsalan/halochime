@@ -72,7 +72,14 @@ export async function POST(req: Request) {
     return widgetError(refusal.status, refusal.code, refusal.message, headers);
   }
 
-  const metadata = { conversationId, agentId: agent.id, organizationId: agent.organizationId, mode: input.mode };
+  const metadata = {
+    conversationId,
+    agentId: agent.id,
+    organizationId: agent.organizationId,
+    mode: input.mode,
+    // The widget already played the greeting while the call connected; the agent must not say it again.
+    ...(input.mode === "voice" && input.greetingPlayed === true ? { greetingPlayed: true } : {}),
+  };
   const { token, roomName } = await mintVisitorToken(lk, metadata);
   // The agent is on its way while the visitor's browser connects (see dispatchAgent).
   after(() => dispatchAgent(lk, metadata));

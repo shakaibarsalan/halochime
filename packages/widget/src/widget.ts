@@ -1,4 +1,5 @@
 import type { ConversationMode, WidgetConfigResponse, WidgetIconShape } from "@talkfront/shared";
+import type { LocalAudioTrack } from "livekit-client";
 import { createSession, fetchConfig, toWidgetError, WidgetError, type ErrorKind } from "./api";
 import { h, icon, isTouchDevice } from "./dom";
 import { renderRich } from "./rich";
@@ -153,6 +154,15 @@ export class TalkfrontWidget extends HTMLElement {
   private session: Session | null = null;
   private starting: StartAttempt | null = null;
   private activity: AgentActivity = "connecting";
+  /**
+   * The greeting, preloaded from the config, played the moment the visitor taps Talk: joining the call
+   * takes 2 to 5 s, and silence after a tap feels broken. The agent is told not to say it again.
+   */
+  private greetingAudio: HTMLAudioElement | null = null;
+  private greetingReady = false;
+  private localGreetingPlaying = false;
+  /** The visitor's mic stays silent while that greeting plays, so the agent never hears it as their words. */
+  private greetingMic: LocalAudioTrack | null = null;
   private conversationHasContent = false;
   /** After a failed start, typing no longer auto-connects until the visitor presses Send or Retry. */
   private prewarmBlocked = false;
@@ -317,6 +327,7 @@ export class TalkfrontWidget extends HTMLElement {
       this.config = config;
       this.mode = config.modes.includes("voice") ? "voice" : config.modes[0]!;
       this.applyTheme(config);
+      this.preloadGreeting(config);
       this.clearNotice();
       this.launcher.hidden = this.isOpen;
       if (config.livekitUrl) warmUpConnection(config.livekitUrl);
@@ -583,9 +594,9 @@ export class TalkfrontWidget extends HTMLElement {
     const live = this.session && !this.starting;
     const status = !ready
       ? "idle"
-      : this.starting || (this.session && this.activity === "connecting")
+      : !this.localGreetingPlaying && (this.starting || (this.session && this.activity === "connecting"))
         ? "connecting"
-        : live
+        : live || this.localGreetingPlaying
           ? "live"
           : "idle";
     this.statusEl.dataset.live = status;
@@ -608,7 +619,68 @@ export class TalkfrontWidget extends HTMLElement {
     }
   }
 
+  /** Fetches the greeting audio in the background so it can play the instant the visitor taps Talk. */
+  private preloadGreeting(config: WidgetConfigResponse): void {
+    if (!config.greetingAudioUrl || !config.modes.includes("voice") || this.greetingAudio) return;
+    try {
+      const audio = new Audio();
+      audio.preload = "auto";
+      audio.addEventListener("canplaythrough", () => (this.greetingReady = true), { once: true });
+      audio.addEventListener("error", () => (this.greetingReady = false), { once: true });
+      audio.src = config.greetingAudioUrl;
+      audio.load();
+      this.greetingAudio = audio;
+    } catch {
+      this.greetingAudio = null;
+    }
+  }
+
+  /**
+   * Starts the preloaded greeting. Resolves true once it is playing (then the agent must not repeat it),
+   * false if the browser refused. null when there is nothing ready to play: the agent greets as before.
+   */
+  private playLocalGreeting(): Promise<boolean> | null {
+    const audio = this.greetingAudio;
+    const text = this.config?.greeting.trim();
+    if (!audio || !this.greetingReady || !text) return null;
+    this.stopLocalGreeting();
+    const done = () => {
+      if (!this.localGreetingPlaying) return;
+      this.localGreetingPlaying = false;
+      if (this.greetingMic) {
+        this.greetingMic.mediaStreamTrack.enabled = true;
+        this.greetingMic = null;
+      }
+      this.render();
+    };
+    audio.onended = done;
+    audio.onerror = done;
+    audio.currentTime = 0;
+    this.localGreetingPlaying = true;
+    this.render();
+    return audio.play().then(
+      () => {
+        if (!this.localGreetingPlaying) return false;
+        this.addBubble("agent", text);
+        return true;
+      },
+      () => {
+        done();
+        return false;
+      },
+    );
+  }
+
+  private stopLocalGreeting(): void {
+    const audio = this.greetingAudio;
+    if (audio && this.localGreetingPlaying) {
+      audio.pause();
+      audio.onended?.(new Event("ended"));
+    }
+  }
+
   private micState(): MicState {
+    if (this.localGreetingPlaying) return "speaking";
     if (this.starting?.mode === "voice") return "connecting";
     const s = this.session;
     if (!s || s.mode !== "voice") return "idle";
@@ -899,11 +971,20 @@ export class TalkfrontWidget extends HTMLElement {
 
     let session: Session | null = null;
     try {
+      // Voice: the greeting starts now, in the tap itself (browsers allow sound then), while the
+      // microphone and the call get ready.
+      const greeting = mode === "voice" ? this.playLocalGreeting() : null;
       // Voice: ask for the microphone before creating the conversation, so a "no" costs nothing.
       const mic = mode === "voice" ? await openMicrophone() : null;
       if (!isCurrent()) {
         mic?.stop();
+        this.stopLocalGreeting();
         return null;
+      }
+      const greetingPlayed = greeting ? await greeting : false;
+      if (mic && this.localGreetingPlaying) {
+        mic.mediaStreamTrack.enabled = false;
+        this.greetingMic = mic;
       }
       session = new Session(mode, this.audioEl, this.sessionEvents(() => session), mic);
       this.session = session;
@@ -912,6 +993,7 @@ export class TalkfrontWidget extends HTMLElement {
         mode,
         visitorId: getVisitorId(),
         ...(this.identityToken ? { identityToken: this.identityToken } : {}),
+        ...(greetingPlayed ? { greetingPlayed: true } : {}),
         page: pageInfo(),
       });
       if (!isCurrent()) {
@@ -928,6 +1010,8 @@ export class TalkfrontWidget extends HTMLElement {
       this.render();
       return session;
     } catch (err) {
+      // No microphone or no call: stop the greeting too.
+      this.stopLocalGreeting();
       if (session) await session.end();
       if (!isCurrent()) return null;
       if (this.session === session) this.session = null;
@@ -993,6 +1077,7 @@ export class TalkfrontWidget extends HTMLElement {
 
   /** Ends whatever is running. `divider` is shown in the transcript when something actually ended. */
   private async endSession(divider: string | null): Promise<void> {
+    this.stopLocalGreeting();
     const session = this.session;
     const wasStarting = !!this.starting;
     this.setMicHint(false);
