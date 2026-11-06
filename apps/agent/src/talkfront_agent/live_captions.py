@@ -21,6 +21,7 @@ softly without stopping it still gets their words on screen from the model's tra
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import json
 import logging
@@ -50,6 +51,9 @@ ENGLISH_MIN_WORDS = 2
 ENGLISH_MIN_CONFIDENCE = 0.75
 # Caption turns remembered for english_text.
 TURNS_KEPT = 30
+# Latin-script languages Deepgram's "multi" model knows. Other codes on Latin words are misheard English
+# (6 Nov: an accented "Okay, goodbye" came back as Malay, "ms").
+MULTI_LATIN_LANGUAGES = {"en", "es", "fr", "de", "pt", "it", "nl"}
 
 
 async def send_json(room: rtc.Room, identity: str | None, topic: str, payload: dict[str, object]) -> None:
@@ -116,26 +120,44 @@ class LiveCaptions:
         # Each caption turn's final words with the language speech to text heard and how surely.
         self._heard_by_turn: dict[int, list[tuple[str, str | None, float | None]]] = {}
 
-    def english_text(self, turn: int) -> str | None:
-        """The turn's words when speech to text surely heard English, else None. The realtime model's
-        transcript of an accented English speaker can come out in Urdu script ("Okay, goodbye" as
-        "اوکے، گڈ بائے", 5 Nov); these words are then the ones to show and keep."""
+    @property
+    def next_message_turn(self) -> int:
+        """The caption turn whose words the next commit sends to the model."""
+        return self._commits
+
+    def language_of(self, turn: int) -> str | None:
+        """The language speech to text surely heard in a caption turn, as a code for the realtime model's
+        transcriber, or None when unsure. Spoken Urdu and Hindi (Deepgram says "hi", in Devanagari) give
+        "ur": the transcript is written in Urdu script, as the agent's replies are."""
         heard = self._heard_by_turn.get(turn)
         if not heard:
             return None
         text = " ".join(t for t, _, _ in heard)
-        languages = [str(lang).lower() for _, lang, _ in heard if lang]
         confidences = [c for _, _, c in heard if c is not None]
         if (
-            script_of(text) != "LATIN"
-            or len(text.split()) < ENGLISH_MIN_WORDS
-            or not languages
-            or not all(lang.startswith("en") for lang in languages)
+            len(text.split()) < ENGLISH_MIN_WORDS
             or not confidences
             or sum(confidences) / len(confidences) < ENGLISH_MIN_CONFIDENCE
         ):
             return None
-        return text
+        languages = [str(lang).lower().split("-")[0] for _, lang, _ in heard if lang]
+        script = script_of(text)
+        if script == "DEVANAGARI" or any(lang in ("hi", "ur") for lang in languages):
+            return "ur"
+        if script == "LATIN":
+            known = [lang for lang in languages if lang in MULTI_LATIN_LANGUAGES]
+            return collections.Counter(known).most_common(1)[0][0] if known else "en"
+        if script == "CYRILLIC" and "ru" in languages:
+            return "ru"
+        return None
+
+    def english_text(self, turn: int) -> str | None:
+        """The turn's words when speech to text surely heard a language written in Latin letters (English,
+        mostly), else None. The realtime model's transcript of an accented English speaker can come out
+        in Urdu script ("Okay, goodbye" as "اوکے، گڈ بائے", 5 Nov); these words are then the ones to keep."""
+        if self.language_of(turn) not in MULTI_LATIN_LANGUAGES:
+            return None
+        return " ".join(t for t, _, _ in self._heard_by_turn[turn])
 
     def agent_speaking(self, speaking: bool, *, now: float | None = None) -> None:
         """The agent started or stopped speaking. Held words go when it finishes on its own."""

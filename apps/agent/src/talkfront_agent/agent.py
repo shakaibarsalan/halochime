@@ -551,16 +551,26 @@ def gate_interruptions(session: AgentSession, echo: EchoGuard) -> bool:
     return True
 
 
-def on_audio_commit(rt_session: llm.RealtimeSession, callback: Callable[[], None], *, server_turns: bool) -> None:
+def on_audio_commit(
+    rt_session: llm.RealtimeSession,
+    callback: Callable[[], None],
+    *,
+    server_turns: bool,
+    before: Callable[[], None] | None = None,
+) -> None:
     """Calls `callback` each time the visitor's held audio goes to the realtime model as one message
-    (the model transcribes each one). LiveKit's turn detection sends it with commit_audio; with
-    OpenAI's own turn detection the server commits when it hears the visitor stop."""
+    (the model transcribes each one), and `before` just before it goes. LiveKit's turn detection sends it
+    with commit_audio; with OpenAI's own turn detection the server commits when it hears the visitor stop
+    (then `before` is never called)."""
     if server_turns:
         rt_session.on("input_speech_stopped", lambda _ev: callback())
         return
     original = rt_session.commit_audio
 
     def commit_audio() -> None:
+        if before is not None:
+            with contextlib.suppress(Exception):  # never break the turn over the transcript's language
+                before()
         held = getattr(rt_session, "_pushed_duration_s", None)
         original()
         # The plugin sends nothing while under 100 ms of audio is held: then no message is made.
@@ -867,6 +877,27 @@ async def entrypoint(ctx: JobContext) -> None:
     user_items = {"n": 0}
     captions_ref: dict[str, LiveCaptions | None] = {"c": None}
 
+    # The language the realtime model's transcriber is told to write the visitor's words in. It guesses
+    # from the sound otherwise, and an accent or a short phrase sends it astray (6 Nov: accented English
+    # written in Urdu script, an Urdu goodbye written as Ukrainian). Set from what the live captions surely
+    # heard for each message just before it goes, and kept when they are unsure.
+    transcription_language = {"current": ""}
+
+    def _pin_transcription_language() -> None:
+        captions = captions_ref["c"]
+        if captions is None:
+            return
+        language = captions.language_of(captions.next_message_turn)
+        if not language or language == transcription_language["current"]:
+            return
+        from openai.types import realtime as rt
+
+        transcription_language["current"] = language
+        agent.realtime_llm_session.update_options(
+            input_audio_transcription=rt.AudioTranscription(model=REALTIME_TRANSCRIBE_MODEL, language=language)
+        )
+        logger.info("the visitor's words are now transcribed as %s", language)
+
     def _as_heard(text: str, index: int) -> str:
         """The visitor's words to keep: an accented English speaker's transcript can come out in Urdu
         script ("Okay, goodbye" as "اوکے، گڈ بائے"); when the live captions surely heard English for
@@ -1090,7 +1121,10 @@ async def entrypoint(ctx: JobContext) -> None:
             # A caption turn ends exactly when the model gets that audio as a message, so caption turn n
             # and the model's transcript n are the same words (one visitor bubble, parts in order).
             on_audio_commit(
-                agent.realtime_llm_session, captions.committed, server_turns=realtime_turn_spec() != "livekit"
+                agent.realtime_llm_session,
+                captions.committed,
+                server_turns=realtime_turn_spec() != "livekit",
+                before=_pin_transcription_language,
             )
         except Exception as e:
             logger.warning("live captions not started: %s", type(e).__name__)

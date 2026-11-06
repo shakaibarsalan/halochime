@@ -4,7 +4,7 @@ A voice-first support agent that any business can put on its website or user por
 Visitors just talk (or type). The agent answers from the business's own knowledge, and later from its CRM
 and database, and hands off to a human when it should.
 
-Status: Phase 1 skeleton. See [docs/roadmap.md](docs/roadmap.md).
+Status: live in production. Phase 1 is done, Phase 2 is partly done. See [docs/roadmap.md](docs/roadmap.md).
 
 ## How it fits together
 

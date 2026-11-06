@@ -179,3 +179,22 @@ def test_unsure_or_other_language_turns_give_nothing() -> None:
     c.committed()
     c.heard("Okay", True, language="en", confidence=0.99)  # one word is too little to go by
     assert c.english_text(2) is None
+
+
+def test_the_transcribers_language_comes_from_what_captions_surely_heard() -> None:
+    # Deepgram "multi" on test speech (6 Nov): Urdu -> "hi" in Devanagari, accented English -> "en", and
+    # "Okay, goodbye" -> "ms" (Malay) in Latin letters.
+    c, _ = shown_captions()
+    c.heard("असल में, मैं पूछना चाह रहा हूँ", True, language="hi", confidence=1.0)
+    assert c.language_of(0) == "ur"
+    c.committed()
+    c.heard("Okey, goodbye.", True, language="ms", confidence=0.97)
+    assert c.language_of(1) == "en"
+    assert c.english_text(1) == "Okey, goodbye."
+    c.committed()
+    c.heard("Hola, quiero saber el precio", True, language="es", confidence=0.95)
+    assert c.language_of(2) == "es"
+    c.committed()
+    c.heard("um", True, language="en", confidence=0.99)
+    assert c.language_of(3) is None  # too little to go by
+    assert c.next_message_turn == 3
