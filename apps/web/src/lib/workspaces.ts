@@ -14,6 +14,7 @@ import {
   wallets,
   webhookEndpoints,
 } from "@/db/schema";
+import { removeWorkspaceChannels } from "./channels/cleanup";
 
 /** Whether the user already owns a workspace. Only their first own workspace gets the free trial. */
 export async function ownsWorkspace(userId: string): Promise<boolean> {
@@ -51,6 +52,8 @@ const isOwnerRole = (role: string) => role.split(",").some((r) => r.trim() === "
  * are lost when a workspace is deleted. Kept: who had the free trial (trial_grants, per user).
  */
 export async function deleteWorkspaceData(organizationId: string): Promise<void> {
+  // Phone numbers connected in LiveKit (Channels page) are outside the database. Best effort, never throws.
+  await removeWorkspaceChannels(organizationId);
   await db.transaction(async (tx) => {
     // Workspaces made before trial_grants existed: remember the trial for its first owner (who made it).
     const [trial] = await tx

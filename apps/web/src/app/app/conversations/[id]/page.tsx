@@ -35,6 +35,12 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
   const details: [string, React.ReactNode][] = [
     ["Agent", row.agentName],
     ["Mode", <ModeBadge key="m" mode={c.mode} />],
+    ...(c.channel === "phone" || c.channel === "whatsapp"
+      ? ([
+          ["Channel", c.channel === "phone" ? "Phone call" : "WhatsApp"],
+          ["From", c.visitorId ? (c.channel === "whatsapp" ? `+${c.visitorId}` : c.visitorId) : "Hidden number"],
+        ] as [string, React.ReactNode][])
+      : []),
     ["Started", formatDateTime(c.startedAt)],
     ["Duration", c.status === "active" ? "In progress" : formatDuration(c.durationSec)],
     ["Ended because", c.endedReason?.replace(/_/g, " ") ?? "-"],
@@ -84,10 +90,13 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
                       "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-6",
                       m.role === "user" && "rounded-br-md bg-brand-600 text-white",
                       m.role === "assistant" && "rounded-bl-md border border-slate-200/80 bg-slate-50 text-slate-900",
+                      // A person from the team who took the conversation over (live inbox).
+                      m.role === "staff" && "rounded-bl-md border border-amber-200 bg-amber-50 text-slate-900",
                       (m.role === "tool" || m.role === "system") && "rounded-lg border border-dashed border-slate-200 bg-white font-mono text-xs text-slate-500",
                     )}
                   >
                     {m.role === "tool" || m.role === "system" ? <span className="mr-1 font-semibold">{m.role}:</span> : null}
+                    {m.role === "staff" ? <span className="block text-[11px] font-semibold text-amber-800">Team</span> : null}
                     {m.content}
                   </div>
                 </li>

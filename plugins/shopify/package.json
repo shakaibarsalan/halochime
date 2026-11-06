@@ -1,0 +1,11 @@
+{
+  "name": "halochime-shopify",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Halochime theme app extension for Shopify (app embed that adds the widget script).",
+  "scripts": {
+    "dev": "shopify app dev",
+    "deploy": "shopify app deploy",
+    "info": "shopify app info"
+  }
+}

@@ -12,7 +12,8 @@ import { AudioLines, Globe, ImageUp, MessageSquare, Mic, Palette, Save, ScrollTe
 import { useActionState, useEffect, useState, type ChangeEvent } from "react";
 import { ActionMessage, SubmitButton } from "@/components/form-bits";
 import { Card, CardHeader, Field, Input, Select, Textarea, Toggle } from "@/components/ui";
-import { LLM_MODELS, STT_MODELS, TTS_VOICES } from "@/lib/agent-defaults";
+import { LLM_MODELS, STT_MODELS } from "@/lib/agent-defaults";
+import type { VoiceGroup } from "@/lib/voices";
 import { LANGUAGES } from "@/lib/languages";
 import { saveAgent } from "../actions";
 
@@ -121,7 +122,19 @@ function LauncherPreview({ dark, icon, color, image, label }: { dark: boolean; i
   );
 }
 
-export function AgentEditor({ agent, canManage }: { agent: EditableAgent; canManage: boolean }) {
+export function AgentEditor({
+  agent,
+  canManage,
+  voiceGroups,
+  moreVoices,
+}: {
+  agent: EditableAgent;
+  canManage: boolean;
+  /** The voice picker's choices (realtime, Deepgram, and ElevenLabs/Cartesia/brand voices when on). */
+  voiceGroups: VoiceGroup[];
+  /** ElevenLabs or Cartesia voices are on: mention them in the hint. */
+  moreVoices: boolean;
+}) {
   const [state, action] = useActionState(saveAgent, null);
   const [color, setColor] = useState(agent.theme.color);
   const [label, setLabel] = useState(agent.theme.label);
@@ -216,17 +229,34 @@ export function AgentEditor({ agent, canManage }: { agent: EditableAgent; canMan
       <Card>
         <CardHeader title="Voice and models" icon={AudioLines} description="Speech, voice and language model settings." />
         <div className="grid gap-5 p-5 sm:grid-cols-2">
-          <Field label="Speech to text" htmlFor="sttModel" hint="Used by classic voices only.">
+          <Field label="Speech to text" htmlFor="sttModel" hint="Used by every voice except the realtime ones.">
             <Select id="sttModel" name="sttModel" defaultValue={agent.sttModel}>
               <Options items={STT_MODELS} current={agent.sttModel} />
             </Select>
           </Field>
-          <Field label="Voice" htmlFor="ttsVoice" hint="Realtime voices answer fastest and speak many languages. Classic voices speak English.">
-            <Select id="ttsVoice" name="ttsVoice" defaultValue={agent.ttsVoice}>
-              <Options items={TTS_VOICES} current={agent.ttsVoice} />
+          <Field
+            label="Voice"
+            htmlFor="ttsVoice"
+            hint={
+              moreVoices
+                ? "Realtime voices answer fastest and speak many languages. Classic voices speak English. ElevenLabs, Cartesia and brand voices speak many languages and answer a little slower."
+                : "Realtime voices answer fastest and speak many languages. Classic voices speak English."
+            }
+          >
+            {/* Keyed by the saved voice: a new brand voice picked on the server shows here right away. */}
+            <Select key={agent.ttsVoice} id="ttsVoice" name="ttsVoice" defaultValue={agent.ttsVoice}>
+              {voiceGroups.map((g) => (
+                <optgroup key={g.label} label={g.label}>
+                  {g.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
             </Select>
           </Field>
-          <Field label="Language model" htmlFor="llmModel" hint="For text chats and classic voices. Realtime voices use their own model.">
+          <Field label="Language model" htmlFor="llmModel" hint="For text chats and every voice except the realtime ones (they use their own model).">
             <Select id="llmModel" name="llmModel" defaultValue={agent.llmModel}>
               <Options items={LLM_MODELS} current={agent.llmModel} />
             </Select>

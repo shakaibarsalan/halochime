@@ -6,6 +6,7 @@ import {
   type WidgetSessionRequest,
   type WidgetSessionResponse,
 } from "@talkfront/shared";
+import { cleanProactive } from "./proactive";
 
 /** Every failure the widget can show the visitor. */
 export type ErrorKind =
@@ -124,12 +125,19 @@ function normalizeConfig(raw: Partial<WidgetConfigResponse>): WidgetConfigRespon
     /^https?:\/\//.test(raw.poweredBy.url)
       ? { poweredBy: { label: raw.poweredBy.label, url: raw.poweredBy.url } }
       : {}),
+    ...(() => {
+      const proactiveHelp = cleanProactive(raw.proactiveHelp);
+      return proactiveHelp ? { proactiveHelp } : {};
+    })(),
+    ...(raw.pageGuide === true ? { pageGuide: true } : {}),
   };
 }
 
-export async function fetchConfig(api: string, key: string): Promise<WidgetConfigResponse> {
+/** visitorId: so an agent running an A/B test shows this visitor's version of the greeting. */
+export async function fetchConfig(api: string, key: string, visitorId?: string): Promise<WidgetConfigResponse> {
+  const vid = visitorId ? `&vid=${encodeURIComponent(visitorId)}` : "";
   const raw = await request<Partial<WidgetConfigResponse>>(
-    `${api}/api/widget/config?key=${encodeURIComponent(key)}`,
+    `${api}/api/widget/config?key=${encodeURIComponent(key)}${vid}`,
     { method: "GET" },
   );
   return normalizeConfig(raw);

@@ -4,3 +4,6 @@ export const canManageIntegrations = (role: string) =>
     const x = r.trim();
     return x === "owner" || x === "admin";
   });
+
+/** Only owners may create or delete cloned brand voices (a person's voice, and a platform cost). */
+export const isOwner = (role: string) => role.split(",").some((r) => r.trim() === "owner");

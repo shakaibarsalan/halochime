@@ -1,8 +1,11 @@
 "use client";
 
 import {
+  Blocks,
   BookOpen,
+  BarChart3,
   Bot,
+  Building2,
   Check,
   ChevronsUpDown,
   Code2,
@@ -13,7 +16,9 @@ import {
   LogOut,
   Menu,
   MessagesSquare,
+  PhoneCall,
   Plus,
+  Radio,
   Settings,
   X,
   type LucideIcon,
@@ -22,17 +27,26 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/logo";
+import { AgencyBrand, type SidebarBrand } from "@/components/agency-brand";
 import { cx } from "@/components/ui";
 import { authClient } from "@/lib/auth-client";
+import { LiveCountBadge } from "./live/live-badge";
 
 const NAV: { href: string; label: string; icon: LucideIcon; exact?: boolean }[] = [
   { href: "/app", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/app/agents", label: "Agents", icon: Bot },
   { href: "/app/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/app/integrations", label: "Integrations", icon: Blocks },
   { href: "/app/install", label: "Install", icon: Code2 },
+  { href: "/app/live", label: "Live", icon: Radio },
+  { href: "/app/channels", label: "Channels", icon: PhoneCall },
   { href: "/app/conversations", label: "Conversations", icon: MessagesSquare },
   { href: "/app/handoffs", label: "Handoffs", icon: Inbox },
+  { href: "/app/analytics", label: "Analytics", icon: BarChart3 },
 ];
+
+/** Shown only to people in more than one workspace (agencies). */
+const AGENCY_NAV: (typeof NAV)[number] = { href: "/app/agency", label: "Agency", icon: Building2 };
 
 const NAV_BOTTOM: typeof NAV = [
   { href: "/app/billing", label: "Billing", icon: CreditCard },
@@ -272,10 +286,15 @@ export function Sidebar({
   workspaceName,
   userEmail,
   openHandoffs = 0,
+  brand = null,
+  showAgency = false,
 }: {
   workspaceName: string;
   userEmail: string;
   openHandoffs?: number;
+  /** White label: the agency's name and logo instead of the Halochime logo. */
+  brand?: SidebarBrand | null;
+  showAgency?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -320,6 +339,7 @@ export function Sidebar({
           aria-hidden
         />
         <span className="flex-1">{item.label}</span>
+        {item.href === "/app/live" ? <LiveCountBadge /> : null}
         {count > 0 ? (
           <span className="rounded-full bg-amber-100 px-1.5 py-px text-[11px] font-semibold tabular-nums text-amber-800">
             <span className="sr-only">, </span>
@@ -335,7 +355,7 @@ export function Sidebar({
     <>
       {/* Phone / tablet top bar: one line. */}
       <div className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-slate-200/80 bg-canvas/90 px-4 backdrop-blur-md lg:hidden">
-        <Logo href="/app" />
+        {brand ? <AgencyBrand brand={brand} /> : <Logo href="/app" />}
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -362,7 +382,7 @@ export function Sidebar({
         )}
       >
         <div className="hidden px-4 pb-2 pt-5 lg:block">
-          <Logo href="/app" className="px-1" />
+          {brand ? <AgencyBrand brand={brand} className="px-1" /> : <Logo href="/app" className="px-1" />}
         </div>
 
         <div className="px-3 pt-4 lg:pt-3">
@@ -371,6 +391,7 @@ export function Sidebar({
 
         <nav aria-label="Dashboard" className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4">
           {NAV.map(link)}
+          {showAgency ? link(AGENCY_NAV) : null}
           <div className="mt-auto flex flex-col gap-0.5 pt-4">{NAV_BOTTOM.map(link)}</div>
         </nav>
 

@@ -55,6 +55,7 @@ const TOC: TocItem[] = [
       { id: "actions-define", label: "Define an action" },
       { id: "actions-request", label: "The request we send" },
       { id: "actions-response", label: "Your response" },
+      { id: "actions-integrations", label: "Ready-made integrations" },
     ],
   },
   {
@@ -629,8 +630,39 @@ export default function DocsPage() {
                   "Adds a button next to Talk and Type that hands the visitor to something else on your page, like your own help chat. Clicking it ends the conversation, closes the panel and calls onSelect. Pass null to remove it.",
                 ],
                 [<C key="h">Halochime.hide() / show()</C>, "Hides the whole widget (an open conversation ends), or brings the button back."],
+                [
+                  <C key="p">{"Halochime.offerHelp({ reason, message })"}</C>,
+                  "Offers help in a small bubble next to the chat button, for example after a failed payment. Tapping it opens the chat, and the agent starts by helping with that. Needs Offer help on its own turned on under Page help in the agent's settings.",
+                ],
               ]}
             />
+            <H3>Offer help at the right moment</H3>
+            <P>
+              Call <C>offerHelp</C> when your page knows the visitor may be stuck. <C>reason</C> is a short word or two for the
+              agent (up to 60 characters, like <C>checkout_failed</C>); <C>message</C> is what the bubble says (up to 120
+              characters). Leave out the message to use the default one from your settings. The bubble never shows while the chat is
+              open, and each reason shows at most once per page in a visit, so calling it again is safe.
+            </P>
+            <Code
+              samples={[
+                {
+                  label: "JavaScript",
+                  code: `window.Halochime = window.Halochime || { q: [] };
+
+// After your payment form reports an error:
+window.Halochime.q.push(["offerHelp", {
+  reason: "checkout_failed",
+  message: "Payment didn't go through? Tap here and we'll help.",
+}]);`,
+                },
+              ]}
+            />
+            <P>
+              You can also offer help without code: under Page help, add rules like &ldquo;address contains /pricing, after 20
+              seconds&rdquo;. Turn on <b>Show visitors where things are</b> there too, and the agent can scroll to a button or link
+              on the visitor&apos;s page and highlight it when they ask where something is. It only sees the names of buttons, links
+              and fields, never what visitors type, and it leaves out password and card fields.
+            </P>
             <H3>Call it before the script loads</H3>
             <P>
               The tag is async, so your code may run first. Push calls onto a queue instead: the script runs them in order once
@@ -751,8 +783,8 @@ window.Halochime.q.push(["logout"]);`,
             </H2>
             <P>
               Actions let the agent call your HTTP API during a conversation, for example to check an order, find a free
-              booking slot or look someone up in your CRM. We don&apos;t have ready-made CRM or database connectors yet;
-              actions and webhooks are how you connect your systems today.
+              booking slot or look someone up in your CRM. For HubSpot, GoHighLevel, Zoho CRM, Cal.com, a booking link or your
+              own Postgres or MySQL database there are ready-made integrations (see below), so you don&apos;t need to build an API.
             </P>
             <H3 id="actions-define">Define an action</H3>
             <P>Open your agent and go to Actions. Each action has:</P>
@@ -803,6 +835,27 @@ X-Halochime-Visitor: user_1042
               failure, so it tells the visitor it couldn&apos;t check. Every call is saved in the conversation&apos;s transcript.
             </P>
             <Code samples={[{ label: "200 OK", code: `{"order_number":"4471","status":"shipped","eta":"2026-10-28"}` }]} />
+            <H3 id="actions-integrations">Ready-made integrations</H3>
+            <P>
+              In the dashboard, Integrations lets owners and admins connect a service with their own credentials and pick which
+              agents may use it. Each one gives the agent a few tools, next to your own actions (your action wins if a name is
+              the same).
+            </P>
+            <DataTable
+              head={["Integration", "What the agent can do"]}
+              rows={[
+                ["HubSpot, GoHighLevel, Zoho CRM", "Check whether the visitor is a contact, save them as a lead (an existing contact only gets its empty fields filled in) and add a note. Optional: add each conversation's summary as a note when it ends."],
+                ["Cal.com", "Find open times for one event type and book one, after reading the details back to the visitor and getting a yes."],
+                ["Booking link", "Share any booking page, such as a Calendly link."],
+                ["Database (Postgres, MySQL)", <>Run read-only queries you write, one tool per query. One <C>SELECT</C> or <C>WITH</C> statement with <C>:name</C> inputs, run in a read-only transaction, stopped after 3 seconds, at most 20 rows.</>],
+              ]}
+            />
+            <Callout>
+              Mark a query input as <b className="font-semibold text-slate-900">Signed-in user id</b> to fill it with the{" "}
+              <C>sub</C> of the visitor&apos;s identity token. The AI can never set it, and the query refuses to run for a visitor
+              who is not signed in. For a visitor who is not signed in, a CRM lookup only says whether a contact exists, never
+              their details. Use a database user that can only read.
+            </Callout>
           </Section>
 
           {/* 7 ------------------------------------------------------------ */}
@@ -991,10 +1044,12 @@ style-src 'unsafe-inline';`,
               head={["Area", "Limit"]}
               rows={[
                 ["Languages", "Voice and text in 12 languages, or matching the visitor's language. Classic voices reply in English only."],
+                ["Brand voices", "Where offered: up to 3 cloned voices per workspace, made by the owner from a sample under 4 MB (1 to 2 minutes of speech), with consent."],
                 ["Knowledge files", "PDF up to 4 MB, plus .txt and .md files."],
                 ["Website import", "Up to 25 pages per run. Run it again for more."],
                 ["Call length", "Set per agent (15 minutes by default)."],
                 ["Actions", "Up to 20 per agent, 20 parameters each, 1 to 15 second timeout, first 4,000 characters of the answer."],
+                ["Database queries", "Up to 20 per workspace, 3 second limit each, at most 20 rows and 4,000 characters of the answer."],
                 ["Webhooks", "Up to 10 endpoints per workspace. 3 attempts per event, 10 second timeout. Delivery log kept 30 days."],
                 ["Identity tokens", "HS256 only. Valid for at most 24 hours. Up to 30 attributes."],
                 ["Sessions", "Up to 10 new sessions per visitor IP per 10 minutes."],

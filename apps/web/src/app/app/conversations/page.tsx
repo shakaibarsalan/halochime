@@ -25,6 +25,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
         id: conversations.id,
         startedAt: conversations.startedAt,
         mode: conversations.mode,
+        channel: conversations.channel,
         status: conversations.status,
         durationSec: conversations.durationSec,
         pageUrl: conversations.pageUrl,
@@ -103,7 +104,10 @@ export default async function ConversationsPage({ searchParams }: { searchParams
                     {c.visitorName ? <Truncate text={c.visitorName} className="text-xs text-slate-500" /> : null}
                   </Td>
                   <Td>
-                    <ModeBadge mode={c.mode} />
+                    <span className="inline-flex flex-wrap items-center gap-1">
+                      <ModeBadge mode={c.mode} />
+                      {c.channel === "phone" || c.channel === "whatsapp" ? <Badge tone="gray">{c.channel === "phone" ? "phone" : "WhatsApp"}</Badge> : null}
+                    </span>
                   </Td>
                   <Td className="whitespace-nowrap tabular-nums">{formatDuration(c.durationSec)}</Td>
                   {showPage ? (

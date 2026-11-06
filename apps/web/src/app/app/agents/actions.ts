@@ -8,10 +8,12 @@ import { WIDGET_APPEARANCES, WIDGET_ICONS, WIDGET_IMAGE_MAX_BYTES } from "@talkf
 import { z } from "zod";
 import type { ActionState } from "@/components/form-bits";
 import { db } from "@/db";
-import { agentImages, agents } from "@/db/schema";
+import { agentImages, agents, voiceClones } from "@/db/schema";
 import { LLM_MODELS, newAgentValues, STT_MODELS, TTS_VOICES } from "@/lib/agent-defaults";
 import { LANGUAGES } from "@/lib/languages";
 import { requireWorkspace } from "@/lib/session";
+import { isSelectableVoice } from "@/lib/voices";
+import { enabledVoiceProviders } from "@/lib/voices-server";
 import { normalizeDomain } from "@/lib/widget-origin";
 import { canManageIntegrations } from "./[id]/roles";
 
@@ -35,7 +37,8 @@ const AgentForm = z.object({
   greeting: z.string().trim().min(1, "Greeting is required.").max(500),
   language: z.enum(LANGUAGES.map((l) => l.code) as [string, ...string[]]),
   sttModel: oneOf(STT_MODELS),
-  ttsVoice: oneOf(TTS_VOICES),
+  // Checked against the voices this workspace may pick once the agent is loaded (see isSelectableVoice).
+  ttsVoice: z.string().trim().min(1).max(200),
   llmModel: oneOf(LLM_MODELS),
   maxDurationMin: z.coerce.number().int().min(1).max(60),
   handoffEnabled: z.boolean(),
@@ -76,11 +79,31 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
   if (domains.length > 50) return { error: "Up to 50 allowed domains." };
 
   const [current] = await db
-    .select({ theme: agents.theme, handoffEmail: agents.handoffEmail, allowedDomains: agents.allowedDomains, status: agents.status })
+    .select({
+      theme: agents.theme,
+      handoffEmail: agents.handoffEmail,
+      allowedDomains: agents.allowedDomains,
+      status: agents.status,
+      ttsVoice: agents.ttsVoice,
+    })
     .from(agents)
     .where(and(eq(agents.id, f.id), eq(agents.organizationId, organizationId)))
     .limit(1);
   if (!current) return { error: "Agent not found." };
+
+  if (f.ttsVoice !== current.ttsVoice) {
+    const clones = await db
+      .select({ id: voiceClones.id })
+      .from(voiceClones)
+      .where(eq(voiceClones.organizationId, organizationId));
+    const allowed = isSelectableVoice(f.ttsVoice, {
+      base: TTS_VOICES,
+      enabled: enabledVoiceProviders(),
+      cloneIds: clones.map((c) => c.id),
+      current: current.ttsVoice,
+    });
+    if (!allowed) return { error: "Pick one of the voices in the list." };
+  }
 
   let imageVersion = current.theme.imageVersion;
   const upload = formData.get("themeImage");

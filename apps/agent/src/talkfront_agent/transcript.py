@@ -1,4 +1,8 @@
-"""Collects transcript rows from session events and posts them to /messages in batches."""
+"""Collects transcript rows from session events and posts them to /messages in batches.
+
+Rows go out every few seconds. The visitor's words, a team member's words and notices go out within
+about a second instead, so a team member watching the live inbox sees the conversation as it happens;
+flushes stay at least a second apart, so a burst of lines is still one request."""
 
 from __future__ import annotations
 
@@ -13,6 +17,11 @@ from .api import MessageRole, TranscriptMessage, make_message
 logger = logging.getLogger("talkfront.transcript")
 
 FLUSH_INTERVAL_S = 5.0
+# Rows of these roles are sent soon (the live inbox shows them): after this short wait, which gathers
+# a burst into one request, and never sooner than MIN_FLUSH_GAP_S after the previous flush.
+URGENT_ROLES: frozenset[str] = frozenset({"user", "staff", "system"})
+URGENT_DELAY_S = 0.3
+MIN_FLUSH_GAP_S = 1.0
 # If the API is down for a long time, keep at most this many unsent rows (oldest dropped).
 MAX_PENDING = 2000
 TOOL_ARGS_PREVIEW = 200
@@ -41,9 +50,20 @@ def describe_tool_call(name: str, arguments: str, output: str | None, is_error: 
 
 
 class TranscriptBuffer:
-    def __init__(self, send: Sender, *, interval: float = FLUSH_INTERVAL_S) -> None:
+    def __init__(
+        self,
+        send: Sender,
+        *,
+        interval: float = FLUSH_INTERVAL_S,
+        urgent_delay: float = URGENT_DELAY_S,
+        min_gap: float = MIN_FLUSH_GAP_S,
+    ) -> None:
         self._send = send
         self._interval = interval
+        self._urgent_delay = urgent_delay
+        self._min_gap = min_gap
+        self._wake = asyncio.Event()
+        self._last_flush = 0.0
         self._pending: list[TranscriptMessage] = []
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
@@ -61,6 +81,8 @@ class TranscriptBuffer:
         if not content:
             return
         self._pending.append(make_message(role, content, created_at))
+        if role in URGENT_ROLES:
+            self._wake.set()
         if len(self._pending) > MAX_PENDING:
             dropped = len(self._pending) - MAX_PENDING
             del self._pending[:dropped]
@@ -71,8 +93,17 @@ class TranscriptBuffer:
             self._task = asyncio.create_task(self._loop(), name="talkfront_transcript_flush")
 
     async def _loop(self) -> None:
+        loop = asyncio.get_running_loop()
         while True:
-            await asyncio.sleep(self._interval)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), self._interval)
+            if self._wake.is_set():
+                await asyncio.sleep(self._urgent_delay)
+            wait = self._min_gap - (loop.time() - self._last_flush)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._wake.clear()
+            self._last_flush = loop.time()
             await self.flush()
 
     async def flush(self) -> bool:

@@ -26,6 +26,8 @@ export async function sweepStaleConversations(): Promise<number> {
       from ${agents} a
      where a.id = c.agent_id
        and c.status = 'active'
+       -- WhatsApp conversations stay open 24 h between messages (lib/channels/whatsapp-inbound.ts closes them).
+       and c.channel <> 'whatsapp'
        and c.started_at < now() - make_interval(secs => a.max_duration_sec + 600)
     returning c.id`);
   return rows.length;

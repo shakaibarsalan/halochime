@@ -5,7 +5,7 @@ import type { ActionParameter } from "@talkfront/shared";
 
 export const ACTION_NAME_RE = /^[a-z][a-z0-9_]{0,39}$/;
 /** Tool names the voice agent already uses. An action with one of these names would clash. */
-export const RESERVED_ACTION_NAMES = ["search_knowledge", "request_human", "confirm_message"] as const;
+export const RESERVED_ACTION_NAMES = ["search_knowledge", "request_human", "confirm_message", "point_to"] as const;
 export const MAX_ACTIONS_PER_AGENT = 20;
 export const MAX_PARAMETERS = 20;
 export const MAX_HEADERS = 20;

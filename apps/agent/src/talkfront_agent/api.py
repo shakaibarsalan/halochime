@@ -27,7 +27,8 @@ TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 
 ConversationMode = Literal["voice", "text"]
-MessageRole = Literal["user", "assistant", "tool", "system"]
+# "staff": a person from the business who took the conversation over (live inbox).
+MessageRole = Literal["user", "assistant", "tool", "system", "staff"]
 EndedReason = Literal["visitor_left", "agent_ended", "max_duration", "out_of_credit", "error"]
 
 _MODES: tuple[str, ...] = get_args(ConversationMode)
@@ -129,14 +130,30 @@ class TtsConfig:
 
 
 @dataclass(frozen=True)
+class ProviderVoice:
+    """A voice from ElevenLabs or Cartesia (curated or the business's own cloned voice). Spoken through
+    the classic pipeline (speech to text -> llm -> this voice). The provider is kept as sent: the agent
+    checks it is one it knows and that its key is set, and otherwise uses the default voice."""
+
+    provider: str
+    voice_id: str
+    model: str = ""
+    # None: let the provider follow the text's language.
+    language: str | None = None
+
+
+@dataclass(frozen=True)
 class VoiceConfig:
-    """Voice calls: "realtime" = one OpenAI speech-to-speech model; "classic" = stt -> llm -> tts."""
+    """Voice calls: "realtime" = one OpenAI speech-to-speech model; "classic" = stt -> llm -> tts.
+    With provider_voice set, the call uses it through the classic pipeline when the agent can, and
+    engine/realtime_voice describe the default voice used otherwise."""
 
     engine: Literal["realtime", "classic"] = "classic"
     realtime_model: str = "gpt-realtime-2.1-mini"
     realtime_voice: str = "marin"
     # Names to recognise in speech (business and agent name).
     vocabulary: tuple[str, ...] = ()
+    provider_voice: ProviderVoice | None = None
 
 
 @dataclass(frozen=True)
@@ -178,12 +195,25 @@ class ActionSpec:
 
 
 @dataclass(frozen=True)
+class HelpOffer:
+    """The visitor opened the conversation from the widget's help bubble (proactive help)."""
+
+    reason: str | None
+    message: str
+    # Voice: instructions for the first reply, said instead of the plain greeting.
+    opener: str
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     conversation_id: str
     mode: ConversationMode
     agent: AgentRuntime
     visitor: VisitorInfo
     actions: tuple[ActionSpec, ...] = ()
+    # Page guide on: read the visitor's page (tf.page) and offer point_to.
+    page_guide: bool = False
+    help_offer: HelpOffer | None = None
 
 
 def _obj(data: Any, path: str) -> dict[str, Any]:
@@ -269,7 +299,19 @@ def parse_runtime_config(data: Any) -> RuntimeConfig:
             attributes=_parse_attributes(visitor.get("attributes")),
         ),
         actions=_parse_actions(root.get("actions")),
+        page_guide=root.get("pageGuide") is True,
+        help_offer=_parse_help_offer(root.get("helpOffer")),
     )
+
+
+def _parse_help_offer(value: Any) -> HelpOffer | None:
+    """Lenient: an older web app sends nothing, and a malformed offer just means a normal start."""
+    if not isinstance(value, dict):
+        return None
+    message, opener, reason = value.get("message"), value.get("opener"), value.get("reason")
+    if not isinstance(message, str) or not isinstance(opener, str) or not opener.strip():
+        return None
+    return HelpOffer(reason=reason if isinstance(reason, str) and reason else None, message=message, opener=opener)
 
 
 def _parse_voice(value: Any) -> VoiceConfig:
@@ -286,6 +328,23 @@ def _parse_voice(value: Any) -> VoiceConfig:
         engine="realtime" if engine == "realtime" else "classic",
         realtime_model=model if isinstance(model, str) and model else VoiceConfig.realtime_model,
         realtime_voice=voice if isinstance(voice, str) and voice else VoiceConfig.realtime_voice,
+        provider_voice=_parse_provider_voice(value.get("providerVoice")),
+    )
+
+
+def _parse_provider_voice(value: Any) -> ProviderVoice | None:
+    """Lenient: anything malformed means no provider voice (the default voice is used)."""
+    if not isinstance(value, dict):
+        return None
+    provider, voice_id = value.get("provider"), value.get("voiceId")
+    if not isinstance(provider, str) or not isinstance(voice_id, str) or not provider or not voice_id:
+        return None
+    model, language = value.get("model"), value.get("language")
+    return ProviderVoice(
+        provider=provider,
+        voice_id=voice_id,
+        model=model if isinstance(model, str) else "",
+        language=language if isinstance(language, str) and language else None,
     )
 
 
@@ -376,6 +435,11 @@ class HandoffRequest(TypedDict):
 class EndConversationRequest(TypedDict):
     endedReason: EndedReason
     durationSec: int
+
+
+class TakeoverRequest(TypedDict):
+    # The agent handed the conversation back to the AI by itself (no word from the team for a while).
+    state: Literal["released"]
 
 
 class RunActionRequest(TypedDict):
@@ -613,6 +677,20 @@ class TalkfrontApi:
             logger.error("runtime config does not match the contract: %s", e)
             raise InternalApiError(f"invalid runtime config: {e}") from e
 
+    async def open_phone_call(self, body: dict[str, str]) -> str:
+        """A phone call arrived: ask the web app to open its conversation (minutes and limits are
+        checked there). Returns the conversation id. Raises InternalApiError with status 402
+        (out_of_credit), 429 (rate_limited), 404 or 409 (channel gone or turned off) when refused.
+        Idempotent per room on the web side, so a network retry is safe."""
+        resp = await self._request(
+            "POST", "/api/internal/phone/calls", json_body=body, timeout=RUNTIME_TIMEOUT_S, idempotent=True
+        )
+        data = self._json(resp, "phone call")
+        conversation_id = data.get("conversationId") if isinstance(data, dict) else None
+        if not isinstance(conversation_id, str) or not conversation_id:
+            raise InternalApiError("phone call: response has no conversationId", status=resp.status_code)
+        return conversation_id
+
     async def search_knowledge(
         self, conversation_id: str, query: str, limit: int = 5, embedding: list[float] | None = None
     ) -> KnowledgeSearchResponse:
@@ -652,6 +730,17 @@ class TalkfrontApi:
             "POST",
             self._conv_path(conversation_id, "end"),
             json_body=request,
+            timeout=WRITE_TIMEOUT_S,
+            idempotent=True,
+        )
+
+    async def release_takeover(self, conversation_id: str) -> None:
+        """Tell the web app the team member's takeover ended (the live inbox shows it). Idempotent."""
+        body: TakeoverRequest = {"state": "released"}
+        await self._request(
+            "POST",
+            self._conv_path(conversation_id, "takeover"),
+            json_body=body,
             timeout=WRITE_TIMEOUT_S,
             idempotent=True,
         )

@@ -26,7 +26,7 @@ const BUILT_IN_LINES = [
   `- visitor_name (text): the visitor's name, as they gave it.`,
   `- email (email): the visitor's email address.`,
   `- phone (phone): the visitor's phone number, with the country code if they gave one.`,
-  `- topic (text): what the visitor wanted, in a few words, e.g. "table booking" or "refund for an order".`,
+  `- topic (text): what the visitor wanted, as a short general topic of 1 to 4 words that other conversations about the same thing would share, e.g. "table booking", "refund", "Mac support" or "pricing". Not a sentence, no names or details of this visitor.`,
   `- outcome: "answered" (the agent answered what they asked), "message_taken" (a message was left for the team), "not_answered" (the agent couldn't help and no message was left) or "other".`,
   `- follow_up_needed (yes or no): true if the team needs to do something for the visitor, false if not.`,
   `- sentiment: "positive", "neutral" or "negative": how the visitor seemed by the end.`,
@@ -96,7 +96,7 @@ export async function summarizeConversation(conversationId: string): Promise<voi
     const rows = await db
       .select({ role: messages.role, content: messages.content })
       .from(messages)
-      .where(and(eq(messages.conversationId, conversationId), inArray(messages.role, ["user", "assistant"])))
+      .where(and(eq(messages.conversationId, conversationId), inArray(messages.role, ["user", "assistant", "staff"])))
       .orderBy(asc(messages.createdAt));
     if (rows.length === 0) return;
 
@@ -110,7 +110,7 @@ export async function summarizeConversation(conversationId: string): Promise<voi
     const fields = readCollectFields(row.collectFields);
     const day = row.startedAt.toISOString().slice(0, 10);
     const transcript = clip(
-      rows.map((m) => `${m.role === "user" ? "Visitor" : "Agent"}: ${m.content}`).join("\n"),
+      rows.map((m) => `${m.role === "user" ? "Visitor" : m.role === "staff" ? "Team member" : "Agent"}: ${m.content}`).join("\n"),
       MAX_TRANSCRIPT_CHARS[provider],
     );
     let user = `<transcript>\n${transcript}\n</transcript>`;

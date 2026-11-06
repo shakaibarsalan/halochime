@@ -1,7 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { sweepStaleConversations } from "@/lib/conversations";
 import { type IdentityTokenClaims, WidgetSessionRequest, type WidgetSessionResponse } from "@talkfront/shared";
-import { conversations } from "@/db/schema";
+import { conversationHelpOffers, conversations } from "@/db/schema";
 import { livekitEnv } from "@/lib/env";
 import { clientIp, parseJson } from "@/lib/http";
 import { dispatchAgent, mintVisitorToken, roomNameFor } from "@/lib/livekit";
@@ -9,7 +9,11 @@ import { rateLimit } from "@/lib/rate-limit";
 import { openIdentitySecret, verifyIdentityToken } from "@/lib/identity";
 import { cleanPageUrl, preflight, resolveWidgetAgent, widgetError } from "@/lib/widget/agent";
 import { startSessionWithinLimits } from "@/lib/widget/limits";
+import { pickVersion } from "@/lib/versions/server";
+import { visitorKeyFor } from "@/lib/versions/split";
 import { corsHeaders } from "@/lib/widget-origin";
+import { acceptedHelpOffer } from "@/lib/page-help";
+import { loadPageHelp } from "@/lib/widget/page-help";
 
 // First, cheap layer: per IP, in memory, so per Vercel instance only. The real limits (per agent,
 // per workspace, voice credit) are counted in the database by startSessionWithinLimits below.
@@ -46,6 +50,10 @@ export async function POST(req: Request) {
 
   const conversationId = crypto.randomUUID();
   const identity = await identifyVisitor(agent, input.identityToken);
+  // A/B test running on this agent: this visitor's version (the same one every time during the test).
+  const version = await pickVersion(agent, visitorKeyFor(input.visitorId, identity?.sub, conversationId));
+  // Only looked up when the visitor came from the help bubble; kept only if proactive help is on.
+  const helpOffer = input.helpOffer ? acceptedHelpOffer(await loadPageHelp(agent.id), input.helpOffer) : null;
   // Per-agent burst, per-workspace running conversations and (voice) credit for every running call,
   // counted and inserted under one lock so parallel requests cannot all slip past the limits.
   const refusal = await startSessionWithinLimits(
@@ -64,7 +72,17 @@ export async function POST(req: Request) {
         pageUrl: cleanPageUrl(input.page?.url),
         pageTitle: input.page?.title ?? null,
         roomName: roomNameFor(conversationId),
+        ...(version ? { agentVersionId: version.versionId, abTestId: version.testId } : {}),
       });
+      if (helpOffer) {
+        await tx.insert(conversationHelpOffers).values({
+          conversationId,
+          organizationId: agent.organizationId,
+          source: helpOffer.source,
+          reason: helpOffer.reason ?? null,
+          message: helpOffer.message,
+        });
+      }
     },
   );
   if (refusal) {

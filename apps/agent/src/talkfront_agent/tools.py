@@ -20,6 +20,7 @@ from .api import (
 from .embeddings import embed_query
 from .lifecycle import HandoffDraft, TurnCounter
 from .actions import build_action_tools
+from .page_guide import PageContext, SendPoint, build_point_tool
 
 logger = logging.getLogger("talkfront.tools")
 
@@ -129,8 +130,13 @@ async def search_formatted(api: TalkfrontApi, conversation_id: str, query: str) 
 
 
 def build_tools(
-    api: TalkfrontApi, runtime: RuntimeConfig, turns: TurnCounter, draft: HandoffDraft | None = None
+    api: TalkfrontApi,
+    runtime: RuntimeConfig,
+    turns: TurnCounter,
+    draft: HandoffDraft | None = None,
+    page: tuple[PageContext, SendPoint] | None = None,
 ) -> list[FunctionTool | RawFunctionTool]:
+    """`page`: the page guide's context and sender, only when the business turned the page guide on."""
     conversation_id = runtime.conversation_id
     handoff_hint = " and offer to connect them with a human." if runtime.agent.handoff_enabled else "."
 
@@ -228,6 +234,10 @@ def build_tools(
 
         tools.extend([request_human, confirm_message])
 
+    if page is not None:
+        tools.append(build_point_tool(*page))
+
     # The business's own HTTP actions (actions.py); names never clash with the tools above.
-    tools.extend(build_action_tools(api, runtime))
+    taken = {t.info.name for t in tools}
+    tools.extend(t for t in build_action_tools(api, runtime) if t.info.name not in taken)
     return tools

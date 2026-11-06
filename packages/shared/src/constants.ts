@@ -13,6 +13,20 @@ export const TOPIC_TRANSCRIPTION = "lk.transcription";
 export const TOPIC_LIVE_CAPTION = "tf.live_caption";
 /** Voice calls: an agent reply the visitor talked over, stopped part way (JSON {text, played_s}), for display only. */
 export const TOPIC_REPLY_CUT = "tf.reply_cut";
+/** Page guide: the visitor's page, widget -> agent (JSON PageSnapshot). Sent when a conversation starts and after the page changes. */
+export const TOPIC_PAGE = "tf.page";
+/** Page guide: highlight one element of that page, agent -> widget (JSON PointMessage). */
+export const TOPIC_POINT = "tf.point";
+
+/**
+ * Live inbox. TOPIC_STAFF: the web app's server to the agent only (LiveKit data, JSON
+ * {type: "takeover", name} | {type: "say", text, id, name} | {type: "release"}).
+ * TOPIC_NOTICE: agent to widget, a team member joined or left (JSON {type: "joined" | "left", text, name}).
+ * TOPIC_STAFF_REPLY: agent to widget, text chats: a team member's reply (JSON {id, name, text}).
+ */
+export const TOPIC_STAFF = "tf.staff";
+export const TOPIC_NOTICE = "tf.notice";
+export const TOPIC_STAFF_REPLY = "tf.staff_reply";
 
 /** error.code values returned by the public widget API. */
 export const WIDGET_ERROR_CODES = [

@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { db } from "@/db";
 import { agents } from "@/db/schema";
 import { rateLimit } from "@/lib/rate-limit";
+import { runningTestSnapshots } from "@/lib/versions/server";
 import {
   GREETING_TTS_INSTRUCTIONS,
   GREETING_TTS_MODEL,
@@ -18,14 +19,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ agen
   const version = req.nextUrl.searchParams.get("v") ?? "";
   const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
 
-  const [agent] = await db
-    .select({ greeting: agents.greeting, ttsVoice: agents.ttsVoice })
-    .from(agents)
-    .where(eq(agents.id, agentId))
-    .limit(1);
-  const voice = agent ? realtimeVoiceName(agent.ttsVoice) : null;
-  const greeting = agent?.greeting.trim() ?? "";
-  if (!agent || !voice || !greeting || version !== greetingAudioVersion(voice, greeting)) return notFound();
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!agent) return notFound();
+  // The agent's own greeting, or (A/B test running) one of the two versions' greetings.
+  const matches = (s: { ttsVoice: string; greeting: string }) => {
+    const voice = realtimeVoiceName(s.ttsVoice);
+    const greeting = s.greeting.trim();
+    return voice && greeting && version === greetingAudioVersion(voice, greeting) ? { voice, greeting } : null;
+  };
+  let found = matches(agent);
+  if (!found) {
+    const tested = await runningTestSnapshots(agent).catch(() => []);
+    for (const s of tested) found ??= matches(s);
+  }
+  if (!found) return notFound();
+  const { voice, greeting } = found;
 
   const key = process.env.OPENAI_API_KEY;
   if (!key) return notFound();

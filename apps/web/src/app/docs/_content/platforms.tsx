@@ -17,6 +17,11 @@ export type PlatformGuide = {
   notes?: ReactNode[];
 };
 
+/** The WordPress plugin, built by plugins/wordpress/build-zip.mjs into apps/web/public/downloads. */
+export const WORDPRESS_ZIP = "/downloads/halochime-wordpress.zip";
+const DOWNLOAD_LINK =
+  "font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800 focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
+
 /** The script tag for one agent. */
 export const embedSnippet = (appUrl: string, publicKey: string) =>
   `<script src="${appUrl}/widget.js" data-key="${publicKey}" async></script>`;
@@ -159,32 +164,41 @@ export function HalochimeWidget() {
     {
       id: "wordpress",
       label: "WordPress",
-      summary: "Use a header and footer plugin, such as WPCode.",
+      summary: "Install the Halochime plugin and paste your public key.",
       steps: [
         <>
-          In your WordPress admin, go to <b>Plugins</b> &rsaquo; <b>Add New Plugin</b>, search for <b>WPCode</b>, then
-          install and activate <b>WPCode: Insert Headers and Footers</b>.
+          <a href={WORDPRESS_ZIP} download className={DOWNLOAD_LINK}>
+            Download the Halochime plugin
+          </a>{" "}
+          (<code>halochime-wordpress.zip</code>). Keep the file zipped.
         </>,
         <>
-          Open <b>Code Snippets</b> &rsaquo; <b>Header &amp; Footer</b>.
+          In your WordPress admin, go to <b>Plugins</b> &rsaquo; <b>Add New Plugin</b> &rsaquo; <b>Upload Plugin</b>, choose the
+          file, select <b>Install Now</b>, then <b>Activate</b>.
         </>,
         <>
-          Paste the snippet into the <b>Footer</b> box and select <b>Save Changes</b>.
+          Go to <b>Settings</b> &rsaquo; <b>Halochime</b>, paste your public key and select <b>Save settings</b>.
         </>,
       ],
-      code: [{ label: "Footer", lang: "html", code: snippet }],
+      code: [
+        { label: "Public key", lang: "html", code: publicKey },
+        { label: "Snippet, if you don't use the plugin", lang: "html", code: snippet },
+      ],
       notes: [
         <>
-          Prefer editing the theme? Paste it before <code>&lt;/body&gt;</code> in your child theme&apos;s{" "}
-          <code>footer.php</code>, so a theme update doesn&apos;t remove it.
+          The plugin can hide the widget from logged-in administrators, and removes its settings when you delete it.
         </>,
-        <>On WordPress.com, installing plugins needs a plan that allows them.</>,
+        <>
+          Without the plugin: paste the snippet into the <b>Footer</b> box of a header and footer plugin such as{" "}
+          <b>WPCode</b>, or before <code>&lt;/body&gt;</code> in your child theme&apos;s <code>footer.php</code>.
+        </>,
+        <>On WordPress.com, uploading plugins needs a plan that allows them.</>,
       ],
     },
     {
       id: "shopify",
       label: "Shopify",
-      summary: "Paste it into your theme's theme.liquid.",
+      summary: "Paste it into your theme's theme.liquid, or turn on the Halochime app embed.",
       steps: [
         <>
           In your Shopify admin, go to <b>Online Store</b> &rsaquo; <b>Themes</b>.
@@ -210,8 +224,13 @@ export function HalochimeWidget() {
         },
       ],
       notes: [
+        <>
+          Installed the Halochime app from an install link? Skip the code: go to <b>Online Store</b> &rsaquo; <b>Themes</b> &rsaquo;{" "}
+          <b>Customize</b> &rsaquo; <b>App embeds</b>, turn on <b>Halochime widget</b>, paste your public key (
+          <code>{publicKey}</code>) and select <b>Save</b>. It keeps working when you switch themes. Halochime support can send you an install link.
+        </>,
         <>Shopify checkout pages don&apos;t use your theme, so the widget doesn&apos;t show there.</>,
-        <>If you switch themes later, add the snippet to the new theme too.</>,
+        <>If you switch themes later, add the snippet to the new theme too (not needed with the app embed).</>,
       ],
     },
     {

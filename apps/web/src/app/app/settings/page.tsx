@@ -1,11 +1,12 @@
 import { and, asc, desc, eq } from "drizzle-orm";
-import { Building2, MailPlus, TriangleAlert, Users } from "lucide-react";
+import { Building2, MailPlus, Paintbrush, TriangleAlert, Users } from "lucide-react";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th, Tr, Truncate } from "@/components/ui";
 import { db } from "@/db";
-import { invitation, member, user, wallets } from "@/db/schema";
+import { invitation, member, user, wallets, workspaceBranding } from "@/db/schema";
 import { appUrl } from "@/lib/env";
 import { formatDateTime, formatMinutes } from "@/lib/format";
 import { requireWorkspace } from "@/lib/session";
+import { BrandingForm } from "./branding-form";
 import { DeleteWorkspaceForm } from "./delete-workspace";
 import { InviteForm, InviteRowActions, MemberRoleControl, RemoveMemberButton } from "./members";
 import { WebhooksSection } from "./webhooks-section";
@@ -22,7 +23,7 @@ export default async function SettingsPage() {
   const canManage = ws.role === "owner" || ws.role === "admin";
   const canDelete = isOwner(ws.role);
 
-  const [members, invites, [wallet]] = await Promise.all([
+  const [members, invites, [wallet], [branding]] = await Promise.all([
     db
       .select({
         id: member.id,
@@ -49,6 +50,19 @@ export default async function SettingsPage() {
       .orderBy(desc(invitation.createdAt)),
     canDelete
       ? db.select({ balance: wallets.balanceSeconds }).from(wallets).where(eq(wallets.organizationId, ws.organizationId))
+      : Promise.resolve([]),
+    // White label: owners only.
+    canDelete
+      ? db
+          .select({
+            poweredBy: workspaceBranding.poweredBy,
+            poweredByLabel: workspaceBranding.poweredByLabel,
+            poweredByUrl: workspaceBranding.poweredByUrl,
+            brandName: workspaceBranding.brandName,
+            logoVersion: workspaceBranding.logoVersion,
+          })
+          .from(workspaceBranding)
+          .where(eq(workspaceBranding.organizationId, ws.organizationId))
       : Promise.resolve([]),
   ]);
 
@@ -206,6 +220,30 @@ export default async function SettingsPage() {
         </Card>
 
         <WebhooksSection organizationId={ws.organizationId} canManage={canManage} />
+
+        {canDelete ? (
+          <Card id="white-label">
+            <CardHeader
+              title="White label"
+              icon={Paintbrush}
+              description="For agencies: hide the Halochime line in the widget or show your own, and put your brand in this dashboard. Only owners see this."
+            />
+            <div className="p-5">
+              <BrandingForm
+                values={{
+                  poweredBy: branding?.poweredBy ?? "halochime",
+                  poweredByLabel: branding?.poweredByLabel ?? "",
+                  poweredByUrl: branding?.poweredByUrl ?? "",
+                  brandName: branding?.brandName ?? "",
+                  logoUrl: branding?.logoVersion
+                    ? `/api/branding/logo?org=${encodeURIComponent(ws.organizationId)}&v=${branding.logoVersion}`
+                    : null,
+                  saved: Boolean(branding),
+                }}
+              />
+            </div>
+          </Card>
+        ) : null}
 
         {canDelete ? (
           <Card id="delete-workspace">

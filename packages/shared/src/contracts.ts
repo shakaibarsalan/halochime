@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { EMBEDDING_DIMENSIONS, WIDGET_APPEARANCES, WIDGET_ICONS } from "./constants";
+import { HelpOffer, WidgetProactiveHelp } from "./page-help";
 
 /**
  * Contracts between the three moving parts:
@@ -57,6 +58,10 @@ export const WidgetConfigResponse = z.object({
    * visitor taps Talk, while the call connects (2 to 5 s), then says greetingPlayed in the session request.
    */
   greetingAudioUrl: z.string().optional(),
+  /** Proactive help bubble rules (page-help.ts). Absent = off. */
+  proactiveHelp: WidgetProactiveHelp.optional(),
+  /** Page guide: tell the agent about the page's buttons and links, and highlight what it points to. Absent = off. */
+  pageGuide: z.boolean().optional(),
 });
 export type WidgetConfigResponse = z.infer<typeof WidgetConfigResponse>;
 
@@ -75,6 +80,8 @@ export const WidgetSessionRequest = z.object({
       title: z.string().max(300).optional(),
     })
     .optional(),
+  /** The visitor opened the chat from the proactive help bubble. Ignored unless proactive help is on. */
+  helpOffer: HelpOffer.optional(),
 });
 export type WidgetSessionRequest = z.infer<typeof WidgetSessionRequest>;
 
@@ -149,7 +156,7 @@ export const RuntimeConfig = z.object({
     }),
     /**
      * Voice calls: "realtime" = one OpenAI speech-to-speech model (stt/llm/tts above unused for voice);
-     * "classic" = Deepgram speech to text -> llm -> Deepgram voice.
+     * "classic" = Deepgram speech to text -> llm -> Deepgram voice (or providerVoice below).
      */
     voice: z.object({
       engine: z.enum(["realtime", "classic"]),
@@ -157,6 +164,19 @@ export const RuntimeConfig = z.object({
       realtimeVoice: z.string(),
       /** Names speech recognition should expect (business and agent name). */
       vocabulary: z.array(z.string().max(60)).max(10),
+      /**
+       * An ElevenLabs, Cartesia or cloned (ElevenLabs) voice. The agent speaks with it through the classic
+       * pipeline when it has the provider's key; otherwise engine/realtimeVoice above are the default voice.
+       * language null: the provider follows the text's language.
+       */
+      providerVoice: z
+        .object({
+          provider: z.enum(["elevenlabs", "cartesia"]),
+          voiceId: z.string(),
+          model: z.string(),
+          language: z.string().nullable(),
+        })
+        .optional(),
     }),
     maxDurationSec: z.number().int().positive(),
     handoffEnabled: z.boolean(),
@@ -179,6 +199,13 @@ export const RuntimeConfig = z.object({
       parameters: z.record(z.string(), z.unknown()),
     }),
   ),
+  /** Page guide is on: the agent reads tf.page and gets the point_to tool. Absent = off. */
+  pageGuide: z.boolean().optional(),
+  /**
+   * The visitor opened this conversation from a help offer. `opener`: voice calls start with a reply
+   * made from these instructions instead of the plain greeting. Absent = a normal start.
+   */
+  helpOffer: z.object({ reason: z.string().nullable(), message: z.string(), opener: z.string() }).optional(),
 });
 export type RuntimeConfig = z.infer<typeof RuntimeConfig>;
 
@@ -232,7 +259,8 @@ export const KnowledgeSearchResponse = z.object({
 });
 export type KnowledgeSearchResponse = z.infer<typeof KnowledgeSearchResponse>;
 
-export const MessageRole = z.enum(["user", "assistant", "tool", "system"]);
+/** "staff": a person from the business who took the conversation over in the live inbox. */
+export const MessageRole = z.enum(["user", "assistant", "tool", "system", "staff"]);
 export type MessageRole = z.infer<typeof MessageRole>;
 
 /** POST /api/internal/conversations/:id/messages -> 204 */
@@ -249,6 +277,13 @@ export const AppendMessagesRequest = z.object({
     .max(100),
 });
 export type AppendMessagesRequest = z.infer<typeof AppendMessagesRequest>;
+
+/**
+ * POST /api/internal/conversations/:id/takeover -> 204
+ * The agent handed a taken over conversation back to the AI by itself (no word from the team member for a while).
+ */
+export const TakeoverRequest = z.object({ state: z.literal("released") });
+export type TakeoverRequest = z.infer<typeof TakeoverRequest>;
 
 /** POST /api/internal/conversations/:id/handoff -> { ok: true } */
 export const HandoffRequest = z.object({

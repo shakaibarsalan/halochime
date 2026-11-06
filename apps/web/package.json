@@ -23,6 +23,7 @@
     "linkedom": "0.18.13",
     "livekit-server-sdk": "2.19.1",
     "lucide-react": "1.55.0",
+    "mysql2": "3.24.6",
     "next": "16.4.3",
     "nodemailer": "10.1.0",
     "postgres": "3.4.9",

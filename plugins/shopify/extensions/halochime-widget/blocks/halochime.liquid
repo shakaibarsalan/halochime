@@ -1,0 +1,36 @@
+{%- comment -%}
+  Halochime widget: adds the voice and chat support agent to every storefront page.
+  The merchant turns it on under Online Store > Themes > Customize > App embeds, and pastes the public key
+  from the Install page of their Halochime dashboard. Nothing is added until a valid key is saved.
+{%- endcomment -%}
+{%- assign halochime_key = block.settings.public_key | strip -%}
+{%- assign halochime_src = block.settings.script_url | strip | default: 'https://halochime.vercel.app/widget.js' -%}
+{%- assign halochime_key_start = halochime_key | slice: 0, 3 -%}
+{%- assign halochime_src_start = halochime_src | slice: 0, 8 -%}
+{%- assign halochime_src_end = halochime_src | slice: -10, 10 -%}
+{%- if halochime_key_start == 'pk_' and halochime_key.size > 12 and halochime_key.size < 68 and halochime_src_start == 'https://' and halochime_src_end == '/widget.js' -%}
+  <script src="{{ halochime_src | escape }}" data-key="{{ halochime_key | escape }}" async></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Halochime widget",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "public_key",
+      "label": "Public key",
+      "placeholder": "pk_...",
+      "info": "Copy it from the Install page of your Halochime dashboard. Also add your store's domain under Allowed domains on the agent, and publish the agent."
+    },
+    {
+      "type": "text",
+      "id": "script_url",
+      "label": "Widget script address",
+      "default": "https://halochime.vercel.app/widget.js",
+      "info": "Leave as it is unless you run your own Halochime server."
+    }
+  ]
+}
+{% endschema %}

@@ -12,6 +12,8 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:cr
 export const HEADERS_INFO = "talkfront-action-headers";
 export const IDENTITY_INFO = "talkfront-identity-secret";
 export const WEBHOOK_INFO = "talkfront-webhook-secret";
+export const CHANNEL_INFO = "talkfront-channel-secrets";
+export const INTEGRATION_INFO = "talkfront-integration-secrets";
 
 const VERSION = "v1";
 const keys = new Map<string, Buffer>();

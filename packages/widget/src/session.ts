@@ -14,13 +14,18 @@ import {
 import {
   TOPIC_CHAT,
   TOPIC_LIVE_CAPTION,
+  TOPIC_NOTICE,
+  TOPIC_POINT,
   TOPIC_REPLY_CUT,
+  TOPIC_STAFF_REPLY,
   TOPIC_TRANSCRIPTION,
   type ConversationMode,
+  type PointMessage,
   type WidgetSessionResponse,
 } from "@talkfront/shared";
 import { WidgetError } from "./api";
 import { MicSilenceWatch } from "./miclevel";
+import { parseStaffNotice, parseStaffReply, type StaffNotice, type StaffReply } from "./staff";
 
 /** What the agent is doing, as far as the visitor needs to know. */
 export type AgentActivity = "connecting" | "listening" | "thinking" | "speaking";
@@ -54,9 +59,15 @@ export interface SessionEvents {
   dropSegment(id: string): void;
   /** Voice: an agent reply already on screen was cut off by the visitor. */
   replyCut(cut: ReplyCut): void;
+  /** A person from the team joined or left the conversation (live inbox). */
+  staffNotice(notice: StaffNotice): void;
+  /** Text chats: a reply written by a person from the team. */
+  staffReply(reply: StaffReply): void;
   audioBlocked(blocked: boolean): void;
   /** Voice: the visitor's mic has stayed silent while the agent waits for them (true), or not any more. */
   micSilent(silent: boolean): void;
+  /** Page guide: the agent wants an element of the page highlighted. */
+  point(message: PointMessage): void;
   ended(reason: EndReason): void;
 }
 
@@ -204,6 +215,18 @@ export class Session {
     await this.room.localParticipant.sendText(text, { topic: TOPIC_CHAT });
   }
 
+  /** Small JSON message to the agent on its own topic (page guide). Waits for the agent to join. */
+  async sendJson(topic: string, payload: unknown): Promise<void> {
+    await this.waitForAgent();
+    if (this.closed || !this.agent) return;
+    await this.room.localParticipant.sendText(JSON.stringify(payload), { topic });
+  }
+
+  /** The agent is in the room (anything sent now reaches it). */
+  get agentJoined(): boolean {
+    return this.agent !== null && !this.closed;
+  }
+
   async resumeAudio(): Promise<void> {
     await this.room.startAudio();
     this.on.audioBlocked(!this.room.canPlaybackAudio);
@@ -216,7 +239,7 @@ export class Session {
     this.silenceWatch?.stop();
     this.silenceWatch = null;
     this.flushAgentWaiters();
-    for (const topic of [TOPIC_TRANSCRIPTION, TOPIC_LIVE_CAPTION, TOPIC_REPLY_CUT]) {
+    for (const topic of [TOPIC_TRANSCRIPTION, TOPIC_LIVE_CAPTION, TOPIC_REPLY_CUT, TOPIC_NOTICE, TOPIC_STAFF_REPLY, TOPIC_POINT]) {
       try {
         this.room.unregisterTextStreamHandler(topic);
       } catch {
@@ -279,6 +302,24 @@ export class Session {
     // Voice: a reply the visitor talked over stopped part way; the widget marks it (or takes it away).
     room.registerTextStreamHandler(TOPIC_REPLY_CUT, (reader) => {
       void this.readReplyCut(reader);
+    });
+
+    // Live inbox: a person from the team joined or left, and (text chats) their replies.
+    room.registerTextStreamHandler(TOPIC_NOTICE, (reader, participant) => {
+      void this.readStaff(reader, participant.identity, (raw) => {
+        const notice = parseStaffNotice(raw);
+        if (notice) this.on.staffNotice(notice);
+      });
+    });
+    room.registerTextStreamHandler(TOPIC_STAFF_REPLY, (reader, participant) => {
+      void this.readStaff(reader, participant.identity, (raw) => {
+        const reply = parseStaffReply(raw);
+        if (reply) this.on.staffReply(reply);
+      });
+    });
+    // Page guide: highlight an element of the page.
+    room.registerTextStreamHandler(TOPIC_POINT, (reader) => {
+      void this.readPoint(reader);
     });
 
     room.on(RoomEvent.ParticipantConnected, (p) => this.considerAgent(p));
@@ -485,6 +526,38 @@ export class Session {
       const text = typeof msg.text === "string" ? msg.text : "";
       const playedS = typeof msg.played_s === "number" && Number.isFinite(msg.played_s) ? msg.played_s : null;
       if (text.trim()) this.on.replyCut({ text, playedS });
+    } catch {
+      // not ours
+    }
+  }
+
+  /** Live inbox messages count only when the agent sent them. */
+  private async readStaff(reader: TextStreamReader, identity: string, handle: (raw: string) => void): Promise<void> {
+    let raw = "";
+    try {
+      raw = await reader.readAll();
+    } catch {
+      return;
+    }
+    if (this.closed) return;
+    const from = this.room.remoteParticipants.get(identity);
+    if (!from || (this.agent ? from.identity !== this.agent.identity : !from.isAgent)) return;
+    handle(raw);
+  }
+
+  private async readPoint(reader: TextStreamReader): Promise<void> {
+    let raw = "";
+    try {
+      raw = await reader.readAll();
+    } catch {
+      return;
+    }
+    if (this.closed || raw.length > 2000) return;
+    try {
+      const msg = JSON.parse(raw) as { id?: unknown; label?: unknown };
+      if (typeof msg.id === "string" && /^e\d{1,6}$/.test(msg.id)) {
+        this.on.point({ id: msg.id, label: typeof msg.label === "string" ? msg.label.slice(0, 60) : "" });
+      }
     } catch {
       // not ours
     }

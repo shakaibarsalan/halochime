@@ -36,7 +36,7 @@ export function isBlockedAddress(address: string): boolean {
 }
 
 // Validates the address at connect time, so a DNS answer cannot change between check and connect.
-const safeLookup: LookupFunction = (hostname, options, callback) => {
+export const safeLookup: LookupFunction = (hostname, options, callback) => {
   lookup(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return callback(err, "", 0);
     const list = addresses as unknown as { address: string; family: number }[];

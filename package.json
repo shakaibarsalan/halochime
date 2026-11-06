@@ -15,7 +15,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:up": "docker compose up -d db",
     "db:generate": "npm run db:generate -w @talkfront/web",
-    "db:migrate": "npm run db:migrate -w @talkfront/web"
+    "db:migrate": "npm run db:migrate -w @talkfront/web",
+    "plugins:zip": "node plugins/wordpress/build-zip.mjs"
   },
   "engines": {
     "node": ">=22"

@@ -28,6 +28,11 @@ interface TalkfrontApi {
   hide(): void;
   /** Shows it again, closed. */
   show(): void;
+  /**
+   * Offers help in a small bubble next to the button, e.g. after a failed checkout. Needs proactive help
+   * on for this agent; shown at most once per page and reason in a visit, never while the chat is open.
+   */
+  offerHelp(options?: { reason?: string; message?: string }): void;
   /** Calls pushed here after load run at once, so stub-style snippets keep working. */
   q: { push(...calls: QueuedCall[]): number };
 }
@@ -40,7 +45,7 @@ declare global {
   }
 }
 
-const API_METHODS = new Set(["open", "close", "identify", "logout", "setSwitch", "hide", "show"]);
+const API_METHODS = new Set(["open", "close", "identify", "logout", "setSwitch", "hide", "show", "offerHelp"]);
 const MAX_TOKEN_LENGTH = 4096;
 const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
@@ -116,6 +121,7 @@ function boot(): void {
     },
     hide: () => el.hide(),
     show: () => el.show(),
+    offerHelp: (options) => el.offerHelp(options),
     q: {
       push: (...calls) => {
         for (const call of calls) run(call);

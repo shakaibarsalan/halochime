@@ -11,7 +11,7 @@ import os
 import re
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import numpy as np
 
@@ -34,7 +34,8 @@ from livekit.agents import (
     room_io,
     stt,
 )
-from livekit.plugins import anthropic, deepgram, groq, openai, silero
+from livekit.agents import tts as tts_mod
+from livekit.plugins import anthropic, cartesia, deepgram, elevenlabs, groq, openai, silero
 
 with warnings.catch_warnings():
     # The plugin is deprecated in favour of livekit.agents.inference.TurnDetector (an audio
@@ -47,6 +48,7 @@ with warnings.catch_warnings():
 from .api import (
     AGENT_NAME,
     ApiSettings,
+    ProviderVoice,
     ContractError,
     DispatchMetadata,
     EndedReason,
@@ -60,7 +62,20 @@ from . import greeting_cache
 from . import aec
 from .echo import EchoGuard, began_at, script_of, spoken_duration
 from .lifecycle import EndReason, HandoffDraft, OnceGuard, TurnCounter
+from . import phone
 from .live_captions import TOPIC_REPLY_CUT, LiveCaptions, send_json
+from .takeover import (
+    TOPIC_NOTICE,
+    TOPIC_STAFF,
+    TOPIC_STAFF_REPLY,
+    StaffDesk,
+    back_text,
+    joined_note_for_model,
+    joined_text,
+    parse_staff_command,
+    released_note_for_model,
+)
+from .page_guide import TOPIC_PAGE, TOPIC_POINT, PageContext, instructions_with_page, read_capped
 from .tools import build_tools, search_formatted
 from .transcript import TranscriptBuffer, describe_tool_call
 
@@ -217,7 +232,70 @@ def refresh_openai_health(block: bool = False) -> None:
         threading.Thread(target=run, name="talkfront-openai-check", daemon=True).start()
 
 
+# ElevenLabs and Cartesia voices (curated, or a business's cloned voice). Platform keys on this server;
+# without the key, or for a provider or voice id we don't know, the agent speaks with its default voice.
+PROVIDER_VOICE_KEYS = {"elevenlabs": "ELEVENLABS_API_KEY", "cartesia": "CARTESIA_API_KEY"}
+DEFAULT_PROVIDER_MODELS = {"elevenlabs": "eleven_flash_v2_5", "cartesia": "sonic-3.6"}
+# ElevenLabs ids are 20 letters and digits, Cartesia ids are UUIDs.
+_PROVIDER_VOICE_ID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+CARTESIA_WORD_TIMING_LANGUAGES = ("en", "de", "es", "fr")
+_PROVIDER_MODEL = re.compile(r"^[a-z0-9._-]{1,64}$")
+
+
+def provider_voice_for(runtime: RuntimeConfig, *, quiet: bool = False) -> ProviderVoice | None:
+    """The ElevenLabs or Cartesia voice this voice call should use, or None for the default voice
+    (`quiet`: don't log why again)."""
+    warn = logger.debug if quiet else logger.warning
+    chosen = runtime.agent.voice.provider_voice
+    if runtime.mode != "voice" or chosen is None:
+        return None
+    key = PROVIDER_VOICE_KEYS.get(chosen.provider)
+    if key is None:
+        warn("unknown voice provider %r; using the default voice", chosen.provider[:40])
+        return None
+    if not _PROVIDER_VOICE_ID.match(chosen.voice_id):
+        warn("%s voice id is not valid; using the default voice", chosen.provider)
+        return None
+    if not os.environ.get(key):
+        warn("%s is not set; using the default voice instead of the %s voice", key, chosen.provider)
+        return None
+    if not _PROVIDER_MODEL.match(chosen.model):
+        chosen = dataclasses.replace(chosen, model=DEFAULT_PROVIDER_MODELS[chosen.provider])
+    return chosen
+
+
+def build_tts(runtime: RuntimeConfig):  # type: ignore[no-untyped-def]
+    """The classic pipeline's voice: the agent's ElevenLabs or Cartesia voice when it can be used (with
+    the Deepgram voice behind it if that provider fails during the call), else the Deepgram voice."""
+    fallback = deepgram.TTS(model=runtime.agent.tts.voice)
+    chosen = provider_voice_for(runtime, quiet=True)
+    if chosen is None:
+        return fallback
+    api_key = os.environ[PROVIDER_VOICE_KEYS[chosen.provider]]
+    if chosen.provider == "elevenlabs":
+        primary = elevenlabs.TTS(
+            voice_id=chosen.voice_id,
+            model=chosen.model,
+            api_key=api_key,
+            **({"language": chosen.language} if chosen.language else {}),
+        )
+    else:
+        primary = cartesia.TTS(
+            api_key=api_key,
+            model=chosen.model,
+            voice=chosen.voice_id,
+            language=chosen.language,
+            # Cartesia times each word only in these languages (others would log a warning per call).
+            word_timestamps=chosen.language in (None, *CARTESIA_WORD_TIMING_LANGUAGES),
+        )
+    if not os.environ.get("DEEPGRAM_API_KEY"):
+        return primary
+    return tts_mod.FallbackAdapter([primary, fallback], max_retry_per_tts=1)
+
+
 def use_realtime(runtime: RuntimeConfig) -> bool:
+    if provider_voice_for(runtime) is not None:
+        return False  # an ElevenLabs or Cartesia voice speaks through the classic pipeline
     if runtime.mode != "voice" or runtime.agent.voice.engine != "realtime" or not os.environ.get("OPENAI_API_KEY"):
         return False
     if time.monotonic() - float(_openai_health["checked_at"]) > REALTIME_PROBE_EVERY_S:
@@ -321,6 +399,10 @@ class TalkfrontAgent(Agent):
         self._knowledge: dict[str, asyncio.Task[str | None]] = {}
         # The visitor's final words from speech to text (not echo), with when they came: (time, text).
         self._heard: collections.deque[tuple[float, str]] = collections.deque(maxlen=20)
+        # Live inbox: True while a person from the team has the conversation (the AI then doesn't answer).
+        self.taken_over: Callable[[], bool] | None = None
+        # Classic voice: keeps a visitor turn the AI doesn't answer (LiveKit drops it on StopResponse).
+        self.on_held_turn: Callable[[str], Awaitable[None]] | None = None
 
     def heard_recently(self, seconds: float) -> str:
         """The visitor's words from speech to text over the last `seconds` (a second opinion on the
@@ -353,7 +435,15 @@ class TalkfrontAgent(Agent):
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:  # type: ignore[no-untyped-def]
         """Realtime voices have no llm_node: put the knowledge for this turn into the model's context
-        before it answers, so a factual answer needs no search tool round trip (about 2 s)."""
+        before it answers, so a factual answer needs no search tool round trip (about 2 s).
+        While a person from the team has the conversation, the AI does not answer at all."""
+        if self.taken_over is not None and self.taken_over():
+            with contextlib.suppress(Exception):
+                self._get_activity_or_raise()._cancel_preemptive_generation()
+            if not self._realtime and self.on_held_turn is not None:
+                # Realtime: the model's own transcript of these words is saved as usual (it has the audio).
+                await self.on_held_turn(new_message.text_content or "")
+            raise llm.StopResponse()
         if not self._realtime or self._api is None:
             return
         metrics = new_message.metrics or {}
@@ -637,7 +727,7 @@ def build_session(runtime: RuntimeConfig, proc: JobProcess, *, realtime: bool = 
     return AgentSession(
         stt=deepgram.STT(model=stt_cfg.model, language=stt_cfg.language, keyterm=keyterm),
         llm=build_llm(runtime),
-        tts=deepgram.TTS(model=agent_cfg.tts.voice),
+        tts=build_tts(runtime),
         vad=vad,
         turn_handling={
             "turn_detection": MultilingualModel(),
@@ -653,9 +743,10 @@ def build_session(runtime: RuntimeConfig, proc: JobProcess, *, realtime: bool = 
     )
 
 
-def room_options_for(mode: str) -> room_io.RoomOptions:
+def room_options_for(mode: str, text_input_cb: Callable[..., Awaitable[None]] | None = None) -> room_io.RoomOptions:
     common = {
-        "text_input": True,  # lk.chat
+        # lk.chat; the callback, when given, decides what happens with a typed message (live inbox).
+        "text_input": room_io.TextInputOptions(text_input_cb=text_input_cb) if text_input_cb else True,  # type: ignore[arg-type]
         "text_output": True,  # lk.transcription
         "close_on_disconnect": True,  # visitor leaving closes the session
         "delete_room_on_close": True,  # rooms are single-use (tf-<conversationId>)
@@ -663,6 +754,26 @@ def room_options_for(mode: str) -> room_io.RoomOptions:
     if mode == "text":
         return room_io.RoomOptions(audio_input=False, audio_output=False, **common)
     return room_io.RoomOptions(audio_input=True, audio_output=True, **common)
+
+
+def staff_aware_text_input(
+    taken_over: Callable[[], bool],
+    keep: Callable[[str], Awaitable[None]],
+    default: Callable[..., object] | None = None,
+) -> Callable[[AgentSession, room_io.TextInputEvent], Awaitable[None]]:
+    """The callback for typed visitor messages: LiveKit's own (the AI answers) normally; while a person
+    from the team has the conversation, `keep` saves the message and nothing answers it."""
+    answer = default or room_io.TextInputOptions().text_input_cb
+
+    async def on_text(sess: AgentSession, ev: room_io.TextInputEvent) -> None:
+        if taken_over():
+            await keep(ev.text)
+            return
+        result = answer(sess, ev)
+        if asyncio.iscoroutine(result):
+            await result
+
+    return on_text
 
 
 def _reason_from_close(reason: CloseReason) -> EndedReason | None:
@@ -675,12 +786,43 @@ def _reason_from_close(reason: CloseReason) -> EndedReason | None:
     return None  # JOB_SHUTDOWN: decided when finalizing
 
 
-def _metadata_from_job(ctx: JobContext) -> DispatchMetadata:
+def _raw_metadata(ctx: JobContext) -> str:
     raw = ctx.job.metadata
     if not raw:
         # Local testing (console / connect) has no dispatch metadata.
         raw = os.environ.get("TALKFRONT_DISPATCH_METADATA", "")
-    return parse_dispatch_metadata(raw)
+    return raw
+
+
+async def _open_phone_call(
+    ctx: JobContext, api: TalkfrontApi, dispatch: phone.PhoneDispatch
+) -> tuple[DispatchMetadata, phone.PhoneCall] | None:
+    """A call from a phone line: there is no conversation yet (the widget makes one before dispatch).
+    Find the caller, ask the web app to open the conversation, and tell the caller and hang up if it
+    says no. Returns the metadata the normal voice flow runs with, or None when the job is over."""
+    await ctx.connect()
+    participant = await phone.wait_for_caller(ctx)
+    call = phone.phone_call_info(participant) if participant is not None else None
+    if call is None:
+        logger.warning("phone dispatch without a caller on the line; leaving")
+        await api.aclose()
+        ctx.shutdown(reason="no caller")
+        return None
+    try:
+        conversation_id = await api.open_phone_call(phone.build_open_call_request(dispatch, ctx.room.name, call))
+    except InternalApiError as e:
+        # The caller's number is never logged.
+        logger.info("phone call not taken: %s %s", e.status, e.code or "")
+        await api.aclose()
+        await phone.say_and_hang_up(ctx, phone.refusal_text(e.code))
+        return None
+    meta = DispatchMetadata(
+        conversation_id=conversation_id,
+        agent_id=dispatch.agent_id,
+        organization_id=dispatch.organization_id,
+        mode="voice",
+    )
+    return meta, call
 
 
 _GOODBYE_WORDS = re.compile(
@@ -730,14 +872,18 @@ server = AgentServer(
 # LIVEKIT_AGENT_NAME lets a dev worker share a LiveKit project with production without taking its calls.
 @server.rtc_session(agent_name=os.environ.get("LIVEKIT_AGENT_NAME") or AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
+    raw_metadata = _raw_metadata(ctx)
+    phone_dispatch: phone.PhoneDispatch | None = None
+    meta: DispatchMetadata | None = None
     try:
-        meta = _metadata_from_job(ctx)
+        if phone.is_phone_dispatch(raw_metadata):
+            phone_dispatch = phone.parse_phone_dispatch(raw_metadata)
+        else:
+            meta = parse_dispatch_metadata(raw_metadata)
     except ContractError as e:
         logger.error("cannot start: %s", e)
         ctx.shutdown(reason="invalid dispatch metadata")
         return
-
-    ctx.log_context_fields = {"conversation_id": meta.conversation_id, "mode": meta.mode}
 
     try:
         api = TalkfrontApi(ApiSettings.from_env())
@@ -745,6 +891,23 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.error("cannot start: %s", e)
         ctx.shutdown(reason="internal api not configured")
         return
+
+    # A phone call (LiveKit SIP) opens its conversation here; a widget session already has one.
+    phone_call: phone.PhoneCall | None = None
+    if phone_dispatch is not None:
+        opened = await _open_phone_call(ctx, api, phone_dispatch)
+        if opened is None:
+            return
+        meta, phone_call = opened
+    assert meta is not None
+
+    ctx.log_context_fields = {
+        "conversation_id": meta.conversation_id,
+        "mode": meta.mode,
+        **({"channel": "phone"} if phone_call is not None else {}),
+    }
+    # Widget-only features (captions, greeting audio file, reply cut notices) are off for a phone caller.
+    features = phone.widget_features(sip=phone_call is not None)
 
     end_reason = EndReason()
     end_once = OnceGuard()
@@ -795,7 +958,13 @@ async def entrypoint(ctx: JobContext) -> None:
     last_visitor_text = {"text": "", "previous": ""}
     realtime = use_realtime(runtime)
     session = build_session(runtime, ctx.proc, realtime=realtime)
-    logger.info("voice engine: %s", "realtime" if realtime else "classic" if runtime.mode == "voice" else "text")
+    chosen_voice = None if realtime else provider_voice_for(runtime, quiet=True)
+    logger.info(
+        "voice engine: %s",
+        "realtime" if realtime
+        else f"classic ({chosen_voice.provider} voice)" if chosen_voice is not None
+        else "classic" if runtime.mode == "voice" else "text",
+    )
 
     def speak(text: str, *, allow_interruptions: bool = True):  # type: ignore[no-untyped-def]
         """Say a fixed sentence. A realtime model has no separate voice, so it is asked to say it.
@@ -914,6 +1083,122 @@ async def entrypoint(ctx: JobContext) -> None:
     # Notices to the widget still being sent (kept so they are not garbage collected half way).
     notices: set[asyncio.Task[None]] = set()
 
+    def _visitor_identity() -> str | None:
+        try:
+            visitor = session.room_io.linked_participant
+        except Exception:
+            return None
+        return visitor.identity if visitor is not None else None
+
+    def _keep_task(task: asyncio.Future[None], what: str) -> None:
+        notices.add(task)  # type: ignore[arg-type]
+
+        def done(t: asyncio.Future[None]) -> None:
+            notices.discard(t)  # type: ignore[arg-type]
+            if not t.cancelled() and t.exception() is not None:
+                logger.warning("%s failed: %s", what, type(t.exception()).__name__)
+
+        task.add_done_callback(done)
+
+    def _tell_widget(topic: str, payload: dict[str, object]) -> None:
+        _keep_task(asyncio.ensure_future(send_json(ctx.room, _visitor_identity(), topic, payload)), "widget notice")
+
+    # ------------------------------------------------------------------ live inbox (takeover by the team)
+    # One change at a time, so each starts from the one before it.
+    history_lock = asyncio.Lock()
+
+    async def _remember(role: str, text: str, *, answer_after: bool = False) -> None:
+        """Adds a line to the model's chat history (it reads it once the AI answers again)."""
+        async with history_lock:
+            updated = agent.chat_ctx.copy()
+            updated.add_message(role=role, content=text)  # type: ignore[arg-type]
+            await agent.update_chat_ctx(updated)
+            if answer_after and not desk.active and end_reason.value is None:
+                session.generate_reply()
+
+    def _remember_soon(role: str, text: str, *, answer_after: bool = False) -> None:
+        _keep_task(asyncio.ensure_future(_remember(role, text, answer_after=answer_after)), "chat history update")
+
+    # The visitor wrote or said something since the team member's last message (answered after hand back).
+    unanswered = {"visitor": False}
+
+    async def _keep_visitor_line(text: str) -> None:
+        """A visitor message the AI does not answer because a team member has the conversation: saved,
+        and kept in the model's history. (Realtime voice saves its own transcript through the session.)"""
+        text = text.strip()
+        if not text:
+            return
+        _touch(by_user=True)
+        turns.user_turn()
+        last_visitor_text["previous"] = last_visitor_text["text"]
+        last_visitor_text["text"] = text
+        unanswered["visitor"] = True
+        transcript.add("user", text, time.time())
+        await _remember("user", text)
+
+    def _staff_joined(name: str) -> None:
+        logger.info("a team member took the conversation over")
+        text = joined_text(name)
+        if desk.spoken_pending == 0:
+            with contextlib.suppress(Exception):
+                stopping = session.interrupt()  # the AI stops mid-reply
+                stopping.add_done_callback(lambda f: f.cancelled() or f.exception())
+        _touch(by_user=False)
+        transcript.add("system", text, time.time())
+        _tell_widget(TOPIC_NOTICE, {"type": "joined", "name": name, "text": text})
+        _remember_soon("system", joined_note_for_model(name))
+
+    def _staff_said(text: str, name: str, message_id: str) -> None:
+        _touch(by_user=False)
+        unanswered["visitor"] = False
+        transcript.add("staff", text, time.time())
+        if runtime.mode == "text":
+            _tell_widget(TOPIC_STAFF_REPLY, {"id": message_id, "name": name, "text": text})
+            _remember_soon("assistant", text)
+            return
+        # Voice: the agent's voice says it word for word. The session adds it to the chat history as an
+        # agent reply; that reply is saved above as "staff" already (see StaffDesk.claim_spoken).
+        try:
+            handle = speak(text)
+        except Exception as e:
+            logger.warning("team member's words were not spoken: %s", type(e).__name__)
+            return
+        desk.expect_spoken(handle)
+        loop = asyncio.get_running_loop()
+        handle.add_done_callback(lambda h: loop.call_soon(desk.forget_spoken, h))
+
+    def _staff_left(name: str, auto: bool) -> None:
+        logger.info("conversation handed back to the AI%s", " (no word from the team)" if auto else "")
+        text = back_text(runtime.agent.name)
+        _touch(by_user=False)
+        transcript.add("system", text, time.time())
+        _tell_widget(TOPIC_NOTICE, {"type": "left", "name": name, "text": text})
+        # A visitor message the team member left unanswered gets the AI's answer now.
+        _remember_soon("system", released_note_for_model(name), answer_after=unanswered["visitor"])
+        unanswered["visitor"] = False
+        if auto:
+            _keep_task(asyncio.ensure_future(api.release_takeover(meta.conversation_id)), "takeover release report")
+
+    desk = StaffDesk(on_join=_staff_joined, on_say=_staff_said, on_release=_staff_left)
+
+    def _on_staff_data(packet: rtc.DataPacket) -> None:
+        if packet.topic != TOPIC_STAFF:
+            return
+        # Only the web app's server sends these (a server SDK sends without a participant). The visitor's
+        # browser can publish data too, and must never be able to silence the AI or speak as the team.
+        if packet.participant is not None:
+            logger.warning("ignored a team command sent by a participant")
+            return
+        cmd = parse_staff_command(packet.data)
+        if cmd is None:
+            logger.warning("ignored an unreadable team command")
+            return
+        if end_reason.value is not None:
+            return  # the conversation is ending
+        desk.handle(cmd)
+
+    _text_input = staff_aware_text_input(lambda: desk.active, _keep_visitor_line)
+
     def _show_reply_cut(item: llm.ChatMessage) -> None:
         """The visitor talked over this reply and it stopped part way. Its bubble looked like any
         finished reply, so the next one read as the agent changing its mind mid-sentence: tell the
@@ -939,7 +1224,7 @@ async def entrypoint(ctx: JobContext) -> None:
         if isinstance(item, llm.ChatMessage) and item.role in ("user", "assistant"):
             _touch(by_user=item.role == "user")
             # Voice only: replies are shown as they are spoken, so a cut one stops on screen too.
-            if item.role == "assistant" and item.interrupted and runtime.mode == "voice":
+            if item.role == "assistant" and item.interrupted and runtime.mode == "voice" and features.reply_cut:
                 _show_reply_cut(item)
             text = item.text_content
             if item.role == "user":
@@ -956,7 +1241,11 @@ async def entrypoint(ctx: JobContext) -> None:
             if item.role == "user" and realtime and ended > last_speech_end["used"]:
                 created_at = min(created_at, ended)
                 last_speech_end["used"] = ended
-            if text:
+            if item.role == "user" and desk.active:
+                unanswered["visitor"] = True
+            # A team member's words spoken by the agent's voice were saved as "staff" already.
+            staff_words = item.role == "assistant" and desk.claim_spoken()
+            if text and not staff_words:
                 transcript.add(item.role, text, created_at)
             if item.metrics:
                 _log_turn_latency(item.metrics, _LATENCY_KEYS if item.role == "assistant" else _VISITOR_TURN_KEYS)
@@ -991,6 +1280,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     async def _end_call(ctx: RunContext) -> str:
         nonlocal end_call_blocked_at_turn, end_call_doubted_at_turn
+        if desk.active:
+            logger.info("end_call refused: a team member has the conversation")
+            return "Not ended: a person from the team is talking with the visitor now. Say nothing."
         # A message the visitor wanted to leave must not be lost: refuse once per visitor turn while
         # it is prepared but unsent. If they say they don't want it, the next call ends the conversation.
         # Realtime: the words that prompted this may not be transcribed yet; give them a moment.
@@ -1042,15 +1334,55 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
+    # Page guide (off unless the business turned it on): the widget describes the visitor's page on
+    # tf.page, the agent can point at an element of it with point_to (tf.point).
+    page: PageContext | None = PageContext() if runtime.page_guide else None
+
+    async def _send_point(payload: dict[str, object]) -> bool:
+        try:
+            visitor = session.room_io.linked_participant
+        except Exception:
+            visitor = None
+        if visitor is None:
+            return False
+        await send_json(ctx.room, visitor.identity, TOPIC_POINT, payload)
+        return True
+
     agent = TalkfrontAgent(
         instructions=runtime.agent.system_prompt,
-        tools=[*build_tools(api, runtime, turns, draft), end_call],
+        tools=[*build_tools(api, runtime, turns, draft, page=(page, _send_point) if page else None), end_call],
         api=api,
         conversation_id=runtime.conversation_id,
         realtime=realtime,
         echo=echo if runtime.mode == "voice" else None,
     )
     agent.on_echo = _on_echo
+    agent.taken_over = lambda: desk.active
+    agent.on_held_turn = _keep_visitor_line
+
+    if page is not None:
+        page_lock = asyncio.Lock()
+
+        async def _read_page(reader: rtc.TextStreamReader) -> None:
+            raw = await read_capped(reader)
+            if raw is None:
+                logger.warning("page description ignored: too long")
+                return
+            async with page_lock:  # in order: a slow update must not overwrite a newer page
+                if not page.update(raw):
+                    return
+                try:
+                    await agent.update_instructions(instructions_with_page(runtime.agent.system_prompt, page))
+                    logger.info("page updated: %d elements", len(page.elements))
+                except Exception as e:
+                    logger.warning("could not update the page in the instructions: %s", type(e).__name__)
+
+        def _on_page(reader: rtc.TextStreamReader, _identity: str) -> None:
+            task = asyncio.ensure_future(_read_page(reader))
+            notices.add(task)
+            task.add_done_callback(notices.discard)
+
+        ctx.room.register_text_stream_handler(TOPIC_PAGE, _on_page)
     # The first knowledge search of a call is slow (about 650 ms against 60 to 100 ms later: cold
     # connections and a cold serverless function). Do one now, while the visitor is still joining.
     agent.prefetch_knowledge(WARMUP_QUERY)
@@ -1059,7 +1391,7 @@ async def entrypoint(ctx: JobContext) -> None:
     try:
         # record=False: LiveKit Cloud keeps no audio, transcripts or traces of calls, whatever the project
         # setting says (the Privacy Policy promises we don't record call audio).
-        await session.start(agent=agent, room=ctx.room, room_options=room_options_for(runtime.mode), record=False)
+        await session.start(agent=agent, room=ctx.room, room_options=room_options_for(runtime.mode, _text_input), record=False)
     except Exception:
         logger.exception("session failed to start")
         end_reason.set("error")
@@ -1098,7 +1430,10 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.shutdown(reason="visitor never joined")
         return
 
-    if realtime:
+    # Live inbox: commands from the web app when a team member takes the conversation over.
+    ctx.room.on("data_received", _on_staff_data)
+
+    if realtime and features.live_captions:
         stt_language = runtime.agent.stt.language
         caption_frames: asyncio.Queue[rtc.AudioFrame] | None = None
         if echo_free is not None:
@@ -1131,7 +1466,12 @@ async def entrypoint(ctx: JobContext) -> None:
 
     started_at = time.monotonic()
     greeting = runtime.agent.greeting.strip()
-    if greeting and runtime.mode == "text":
+    offer = runtime.help_offer
+    if offer is not None and runtime.mode == "voice" and not meta.greeting_played:
+        # Opened from the help bubble: one opener that greets and offers help with what it was about
+        # (the widget does not play its ready-made greeting for these calls).
+        session.generate_reply(instructions=offer.opener)
+    elif greeting and runtime.mode == "text":
         # A text chat starts with the visitor's first message, and the widget already shows the
         # greeting above it. Saying it now would land after their question, so only record it.
         transcript.add("assistant", greeting, joined_at)
@@ -1149,7 +1489,7 @@ async def entrypoint(ctx: JobContext) -> None:
         )
     elif greeting:
         voice = runtime.agent.voice.realtime_voice
-        audio = greeting_cache.cached(voice, greeting) if realtime else None
+        audio = greeting_cache.cached(voice, greeting) if realtime and features.greeting_audio else None
         if audio is not None:
             # Ready-made audio: the visitor hears the greeting at once instead of after the model
             # has been asked to say it (about 2 s).
@@ -1167,7 +1507,7 @@ async def entrypoint(ctx: JobContext) -> None:
             handle.add_done_callback(_greeting_said)
         else:
             speak(greeting)
-            if realtime:
+            if realtime and features.greeting_audio:
                 greeting_cache.make_in_background(voice, greeting)
 
     async def _max_duration_watch(limit: int) -> None:
@@ -1192,6 +1532,11 @@ async def entrypoint(ctx: JobContext) -> None:
             await asyncio.sleep(2)
             if end_reason.value is not None:
                 return  # ending already (goodbye, time limit): no more check-ins
+            # Back to the AI when the team member has gone quiet; no check-ins while they have it.
+            desk.check_idle()
+            if desk.active:
+                _touch(by_user=False)
+                continue
             if getattr(session, "agent_state", None) in ("speaking", "thinking"):
                 _touch(by_user=False)  # a long answer is not the visitor being idle
                 continue

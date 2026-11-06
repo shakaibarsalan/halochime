@@ -1,0 +1,3 @@
+# Theme app extension: one app embed block that adds the Halochime widget to every page of the store.
+name = "Halochime widget"
+type = "theme"

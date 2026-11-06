@@ -4,6 +4,8 @@ import {
   BookOpen,
   Bot,
   Code2,
+  Download,
+  Puzzle,
   Globe,
   Layers,
   LayoutGrid,
@@ -14,12 +16,12 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { AgentStatusBadge, ButtonLink, Card, CardHeader, EmptyState, PageHeader } from "@/components/ui";
+import { AgentStatusBadge, buttonClass, ButtonLink, Card, CardHeader, EmptyState, PageHeader } from "@/components/ui";
 import { db } from "@/db";
 import { agents } from "@/db/schema";
 import { appUrl } from "@/lib/env";
 import { requireWorkspace } from "@/lib/session";
-import { cspSources, embedSnippet, platformGuides } from "../../docs/_content/platforms";
+import { cspSources, embedSnippet, platformGuides, WORDPRESS_ZIP } from "../../docs/_content/platforms";
 import { AgentPicker, CheckSite, CodeBlock, CopyIconButton, PlatformTabs } from "./install-client";
 
 export const metadata = { title: "Install" };
@@ -192,6 +194,35 @@ export default async function InstallPage({ searchParams }: { searchParams: Prom
         </div>
 
         <div className="grid grid-cols-[minmax(0,1fr)] content-start gap-6 md:grid-cols-2 xl:sticky xl:top-10 xl:grid-cols-1 xl:self-start">
+          <Card>
+            <CardHeader title="Plugins" icon={Puzzle} description="No code: paste your public key into the plugin." />
+            <div className="space-y-4 p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-900">WordPress</p>
+                  <p className="text-xs leading-5 text-slate-500">Settings &rsaquo; Halochime after you upload and activate it.</p>
+                </div>
+                <a href={WORDPRESS_ZIP} download className={`${buttonClass("secondary", "sm")} shrink-0`}>
+                  <Download aria-hidden />
+                  Download
+                </a>
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-900">Shopify</p>
+                <p className="text-xs leading-5 text-slate-500">
+                  With the Halochime app installed, turn on the Halochime widget under Customize &rsaquo; App embeds. Without it, use
+                  the theme.liquid steps in the Shopify tab.
+                </p>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200/70">
+                <span className="min-w-0 truncate font-mono text-xs text-slate-700" title={agent.publicKey}>
+                  {agent.publicKey}
+                </span>
+                <CopyIconButton text={agent.publicKey} label="public key" tone="light" />
+              </div>
+            </div>
+          </Card>
+
           <Card>
             <CardHeader title="Check my site" icon={Radar} />
             <div className="p-5">

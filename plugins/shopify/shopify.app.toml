@@ -1,0 +1,13 @@
+# Shopify app config for the Halochime theme app extension. `shopify app config link` fills in client_id
+# (and may rewrite this file) when you connect this folder to the app you created. See README.md.
+client_id = ""
+name = "Halochime"
+application_url = "https://halochime.vercel.app"
+embedded = false
+
+[access_scopes]
+# The extension only adds a script tag to the theme: it reads no store data.
+scopes = ""
+
+[build]
+include_config_on_deploy = true

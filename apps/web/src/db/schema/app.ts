@@ -22,6 +22,7 @@ import {
   type WidgetTheme,
 } from "@talkfront/shared";
 import { organization, user } from "./auth";
+import { agentAbTests, agentVersions } from "./platform";
 
 // Product tables. Better Auth owns ./auth.ts (user, session, organization, member, ...).
 // A "workspace" in the UI is a Better Auth organization: one per business.
@@ -52,7 +53,8 @@ const tsvector = customType<{ data: string }>({
 export const agentStatus = pgEnum("agent_status", ["draft", "published"]);
 export const conversationMode = pgEnum("conversation_mode", ["voice", "text"]);
 export const conversationStatus = pgEnum("conversation_status", ["active", "ended"]);
-export const messageRole = pgEnum("message_role", ["user", "assistant", "tool", "system"]);
+// "staff": a person from the business who took the conversation over (live inbox).
+export const messageRole = pgEnum("message_role", ["user", "assistant", "tool", "system", "staff"]);
 export const sourceType = pgEnum("knowledge_source_type", ["text", "url", "file"]);
 export const sourceStatus = pgEnum("knowledge_source_status", [
   "pending",
@@ -195,10 +197,26 @@ export const conversations = pgTable(
     /** What was gathered, written with the summary when the conversation ends. null = not (yet) collected. */
     collectedData: jsonb("collected_data").$type<CollectedData>(),
     handoffRequested: boolean("handoff_requested").notNull().default(false),
+    /**
+     * Live inbox: the team member who has taken this conversation over from the AI (null = the AI has it).
+     * Plain text, not a foreign key: the line stays readable if the member is removed later.
+     */
+    takenOverByUserId: text("taken_over_by_user_id"),
+    takenOverByName: text("taken_over_by_name"),
+    takenOverAt: timestamp("taken_over_at", { withTimezone: true }),
+    /** The saved version this conversation ran with (A/B tests). null = the agent's own settings. */
+    agentVersionId: text("agent_version_id").references(() => agentVersions.id, { onDelete: "set null" }),
+    /** The A/B test that picked the version. */
+    abTestId: text("ab_test_id").references(() => agentAbTests.id, { onDelete: "set null" }),
   },
   (t) => [
     index("conversations_org_started_idx").on(t.organizationId, t.startedAt.desc()),
     index("conversations_agent_idx").on(t.agentId),
+    index("conversations_ab_test_idx").on(t.abTestId).where(sql`${t.abTestId} is not null`),
+    // Open WhatsApp conversations per sender (lib/channels/whatsapp-inbound.ts) and their 24 h idle sweep.
+    index("conversations_whatsapp_open_idx")
+      .on(t.agentId, t.visitorId)
+      .where(sql`${t.channel} = 'whatsapp' and ${t.status} = 'active'`),
   ],
 );
 

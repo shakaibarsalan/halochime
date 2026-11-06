@@ -1,7 +1,10 @@
-import type { ConversationMode, WidgetConfigResponse, WidgetIconShape } from "@talkfront/shared";
+import { TOPIC_PAGE, type ConversationMode, type HelpOffer, type PageSnapshot, type WidgetConfigResponse, type WidgetIconShape } from "@talkfront/shared";
 import type { LocalAudioTrack } from "livekit-client";
 import { createSession, fetchConfig, toWidgetError, WidgetError, type ErrorKind } from "./api";
 import { h, icon, isTouchDevice } from "./dom";
+import { clearHighlight, highlight } from "./highlight";
+import { collectFromDocument, idMaker, sendDelay, signature } from "./pageguide";
+import { cleanOffer, matchRule, OfferMemory, offerKey, sessionStore } from "./proactive";
 import { renderRich } from "./rich";
 import { ICON_CLOSE, ICON_MIC, ICON_MIC_OFF, ICON_SEND, ICON_WAVE, shapeIcon } from "./icons";
 import {
@@ -15,6 +18,7 @@ import {
   audioSettleMs,
 } from "./session";
 import { cutReplyGoes, cutReplyIndex, VisitorSpeech } from "./speech";
+import { staffLabel } from "./staff";
 import { STYLES } from "./styles";
 import { getVisitorId } from "./visitor";
 
@@ -104,6 +108,16 @@ function pageInfo(): { url: string; title?: string } {
   const title = document.title.trim().slice(0, 300);
   return title ? { url, title } : { url };
 }
+
+/** How often the page address is checked (single-page sites change it without a reload). */
+const PATH_POLL_MS = 1_000;
+/** Page guide: changes are batched this long, and the page is sent at most this often. */
+const GUIDE_DEBOUNCE_MS = 800;
+const GUIDE_MIN_GAP_MS = 4_000;
+/** This many added/removed nodes count as a big change of the page. */
+const GUIDE_BIG_CHANGE = 20;
+/** Phones: the panel covers the page, so it steps aside while a highlight shows. */
+const PEEK_MAX_WIDTH = 480;
 
 /** A cut reply whose words are not on screen yet is looked for once more after this long. */
 const CUT_RETRY_MS = 1_500;
@@ -213,6 +227,30 @@ export class TalkfrontWidget extends HTMLElement {
    */
   private identityToken: string | null = null;
 
+  // Proactive help (off unless config.proactiveHelp): the bubble next to the launcher.
+  private helpEl!: HTMLDivElement;
+  private helpOpenBtn!: HTMLButtonElement;
+  /** The offer on screen. */
+  private helpShown: HelpOffer | null = null;
+  /** The visitor tapped the bubble: the next conversation carries it (WidgetSessionRequest.helpOffer). */
+  private pendingOffer: HelpOffer | null = null;
+  /** offerHelp() called before the config arrived. */
+  private queuedOffer: { raw: unknown } | null = null;
+  private offerMemory: OfferMemory | null = null;
+  private helpTimer = 0;
+  private pathTimer = 0;
+  private lastPath = "";
+
+  // Page guide (off unless config.pageGuide).
+  private guideIds = idMaker<Element>();
+  private guideMap = new Map<string, Element>();
+  private guideSig = "";
+  private guideSentAt: number | null = null;
+  private guideTimer = 0;
+  private guideObserver: MutationObserver | null = null;
+  private guideChanges = 0;
+  private guideSession: Session | null = null;
+
   /** Called by the loader before the element is attached. */
   setup(key: string, api: string): void {
     this.key = key;
@@ -231,6 +269,9 @@ export class TalkfrontWidget extends HTMLElement {
 
   disconnectedCallback(): void {
     void this.endSession(null);
+    clearInterval(this.pathTimer);
+    clearTimeout(this.helpTimer);
+    this.pathTimer = 0;
   }
 
   // ---------------------------------------------------------------- public API
@@ -239,6 +280,7 @@ export class TalkfrontWidget extends HTMLElement {
     if (!this.built) this.build();
     if (this.isOpen || this.hiddenByHost) return;
     this.isOpen = true;
+    this.hideHelp();
     this.settleClose();
     this.panel.hidden = false;
     this.launcher.hidden = true;
@@ -268,6 +310,7 @@ export class TalkfrontWidget extends HTMLElement {
   hide(): void {
     this.hiddenByHost = true;
     if (!this.built) return;
+    this.hideHelp();
     this.close();
     this.rootEl.hidden = true;
   }
@@ -282,6 +325,8 @@ export class TalkfrontWidget extends HTMLElement {
     if (!this.isOpen) return;
     const hadFocus = this.shadowRoot?.activeElement != null;
     this.isOpen = false;
+    this.pendingOffer = null;
+    this.setPeek(false);
     // Play the exit animation, then hide. Inert at once, so nothing in it can be reached meanwhile.
     this.panel.inert = true;
     this.panel.classList.add("closing");
@@ -292,6 +337,25 @@ export class TalkfrontWidget extends HTMLElement {
     // Closing the panel ends the conversation and releases the microphone.
     void this.endSession("Conversation ended");
     if (hadFocus && !this.launcher.hidden) this.launcher.focus();
+  }
+
+  /**
+   * Proactive help from the host page (Halochime.offerHelp), e.g. after a failed checkout: shows the
+   * bubble once per page and reason in this visit. Does nothing while the chat is open or the business
+   * has proactive help off.
+   */
+  offerHelp(raw: unknown): void {
+    if (!this.config) {
+      this.queuedOffer = { raw };
+      return;
+    }
+    const help = this.config.proactiveHelp;
+    if (!help) {
+      console.info("[Halochime] offerHelp() ignored: proactive help is off for this agent (turn it on under Page help in the agent's settings).");
+      return;
+    }
+    const { reason, message } = cleanOffer(raw, help.defaultMessage);
+    this.showHelp({ source: "api", message, ...(reason ? { reason } : {}) }, offerKey(location.pathname, "api", reason));
   }
 
   /** Finishes (or cancels, when reopened) a pending close animation. */
@@ -307,7 +371,7 @@ export class TalkfrontWidget extends HTMLElement {
   private async loadConfig(): Promise<void> {
     this.configError = null;
     try {
-      const config = await fetchConfig(this.api, this.key);
+      const config = await fetchConfig(this.api, this.key, getVisitorId());
       this.config = config;
       this.mode = config.modes.includes("voice") ? "voice" : config.modes[0]!;
       this.applyTheme(config);
@@ -315,6 +379,7 @@ export class TalkfrontWidget extends HTMLElement {
       this.clearNotice();
       this.launcher.hidden = this.isOpen;
       if (config.livekitUrl) warmUpConnection(config.livekitUrl);
+      this.startPageWatch(config);
     } catch (err) {
       this.configError = toWidgetError(err);
       this.launcher.hidden = true;
@@ -394,6 +459,21 @@ export class TalkfrontWidget extends HTMLElement {
       this.launcherLabel,
     );
     this.launcher.addEventListener("click", () => void this.open());
+
+    // Proactive help bubble (shown by showHelp)
+    this.helpOpenBtn = h("button", { type: "button", class: "help-open" });
+    this.helpOpenBtn.addEventListener("click", () => {
+      const offer = this.helpShown;
+      this.hideHelp();
+      this.pendingOffer = offer;
+      void this.open();
+    });
+    const helpClose = h("button", { type: "button", class: "help-close", "aria-label": "Dismiss" }, icon(ICON_CLOSE));
+    helpClose.addEventListener("click", () => {
+      this.hideHelp();
+      if (!this.launcher.hidden) this.launcher.focus();
+    });
+    this.helpEl = h("div", { class: "help", role: "status", hidden: true }, this.helpOpenBtn, helpClose);
 
     // Header
     this.titleEl = h("h2", { class: "title", id: "tf-title" }, "Support");
@@ -510,6 +590,8 @@ export class TalkfrontWidget extends HTMLElement {
       this.log,
       footer,
     );
+    // Phones: a tap on the panel while it stepped aside for a highlight brings it back.
+    this.panel.addEventListener("pointerdown", () => this.setPeek(false));
     this.panel.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -520,7 +602,7 @@ export class TalkfrontWidget extends HTMLElement {
     this.audioEl = h("audio", { autoplay: true, hidden: true });
     this.audioEl.setAttribute("playsinline", "");
 
-    this.rootEl = h("div", { class: "root", hidden: this.hiddenByHost }, this.launcher, this.panel, this.audioEl);
+    this.rootEl = h("div", { class: "root", hidden: this.hiddenByHost }, this.helpEl, this.launcher, this.panel, this.audioEl);
     this.switchBtn.textContent = this.switchAction?.label ?? "";
     shadow.append(style, this.rootEl);
   }
@@ -785,6 +867,20 @@ export class TalkfrontWidget extends HTMLElement {
     return li;
   }
 
+  /** Text chats: a reply from a person on the business's team, on the agent's side, with their name. */
+  private addStaffBubble(name: string, text: string): HTMLLIElement {
+    const body = h("span", { class: "body" });
+    renderRich(body, text);
+    const li = h("li", { class: "msg agent staff" }, h("span", { class: "who" }, staffLabel(name)), h("span", { class: "sr-only" }, ": "), body);
+    this.addItem(li);
+    return li;
+  }
+
+  /** A small centred line: a person from the team joined or left. */
+  private addSystemLine(text: string): void {
+    this.addItem(h("li", { class: "divider system", role: "status" }, text));
+  }
+
   private addDivider(text: string): void {
     if (!this.conversationHasContent) return;
     const last = this.log.lastElementChild;
@@ -928,6 +1024,9 @@ export class TalkfrontWidget extends HTMLElement {
     this.activity = "connecting";
 
     let session: Session | null = null;
+    // Opened from the help bubble: the agent opens with help about it (so no ready-made greeting).
+    const offer = this.pendingOffer;
+    this.pendingOffer = null;
     try {
       // Voice: the greeting plays once the microphone is open and the sound has settled, never before:
       // not while the browser still asks for the microphone (5 Nov), and not into the switch to call
@@ -949,7 +1048,7 @@ export class TalkfrontWidget extends HTMLElement {
           mic.stop();
           return null;
         }
-        greeting = this.playLocalGreeting();
+        greeting = offer ? null : this.playLocalGreeting();
       }
       const greetingPlayed = greeting ? await greeting : false;
       if (mic && this.localGreetingPlaying) {
@@ -964,6 +1063,7 @@ export class TalkfrontWidget extends HTMLElement {
         visitorId: getVisitorId(),
         ...(this.identityToken ? { identityToken: this.identityToken } : {}),
         ...(greetingPlayed ? { greetingPlayed: true } : {}),
+        ...(offer ? { helpOffer: offer } : {}),
         page: pageInfo(),
       });
       if (!isCurrent()) {
@@ -978,6 +1078,7 @@ export class TalkfrontWidget extends HTMLElement {
       this.starting = null;
       this.prewarmBlocked = false;
       this.render();
+      this.startGuide(session);
       return session;
     } catch (err) {
       // No microphone or no call: stop the greeting too.
@@ -1018,6 +1119,14 @@ export class TalkfrontWidget extends HTMLElement {
       replyCut: ({ text, playedS }) => {
         if (isMine()) this.markReplyCut(text, playedS);
       },
+      staffNotice: ({ text }) => {
+        if (isMine()) this.addSystemLine(text);
+      },
+      staffReply: ({ name, text }) => {
+        if (!isMine()) return;
+        this.setTyping(false);
+        this.addStaffBubble(name, text);
+      },
       audioBlocked: (blocked) => {
         if (!isMine()) return;
         if (blocked) {
@@ -1033,9 +1142,13 @@ export class TalkfrontWidget extends HTMLElement {
       micSilent: (silent) => {
         if (isMine()) this.setMicHint(silent);
       },
+      point: ({ id, label }) => {
+        if (isMine()) this.pointAt(id, label);
+      },
       ended: (reason) => {
         if (!isMine()) return;
         this.setMicHint(false);
+        this.stopGuide();
         this.session = null;
         this.starting = null;
         this.setTyping(false);
@@ -1054,6 +1167,7 @@ export class TalkfrontWidget extends HTMLElement {
     const session = this.session;
     const wasStarting = !!this.starting;
     this.setMicHint(false);
+    this.stopGuide();
     this.session = null;
     this.starting = null;
     this.activity = "connecting";
@@ -1098,6 +1212,149 @@ export class TalkfrontWidget extends HTMLElement {
       this.showError(e.kind === "unknown" ? new WidgetError("mic_denied", e.message) : e);
     }
     this.render();
+  }
+
+  // ---------------------------------------------------------------- proactive help
+
+  /** Watches the page address (single-page sites change it without a reload) for both features. */
+  private startPageWatch(config: WidgetConfigResponse): void {
+    if (config.proactiveHelp && !this.offerMemory) this.offerMemory = new OfferMemory(config.agentId, sessionStore());
+    const queued = this.queuedOffer;
+    this.queuedOffer = null;
+    if (!config.proactiveHelp && !config.pageGuide) {
+      if (queued) this.offerHelp(queued.raw); // logs that it is off
+      return;
+    }
+    this.lastPath = location.pathname;
+    this.scheduleRuleOffer();
+    if (!this.pathTimer) {
+      this.pathTimer = window.setInterval(() => {
+        if (location.pathname === this.lastPath) return;
+        this.lastPath = location.pathname;
+        this.hideHelp(); // that offer was about the page they left
+        this.scheduleRuleOffer();
+        this.scheduleGuide();
+      }, PATH_POLL_MS);
+    }
+    if (queued) this.offerHelp(queued.raw);
+  }
+
+  /** The first page rule for this page starts its timer, unless its bubble was shown in this visit. */
+  private scheduleRuleOffer(): void {
+    clearTimeout(this.helpTimer);
+    const help = this.config?.proactiveHelp;
+    if (!help) return;
+    const path = location.pathname;
+    const rule = matchRule(help.rules, path);
+    if (!rule) return;
+    const key = offerKey(path, "rule");
+    if (this.offerMemory?.shown(key)) return;
+    this.helpTimer = window.setTimeout(() => {
+      if (location.pathname === path) this.showHelp({ source: "rule", message: rule.message }, key);
+    }, rule.delaySec * 1000);
+  }
+
+  /** Shows the bubble unless the chat is in use; each offer at most once per visit. */
+  private showHelp(offer: HelpOffer, key: string): void {
+    if (!this.built || !this.config?.proactiveHelp) return;
+    if (this.isOpen || this.hiddenByHost || this.launcher.hidden || this.session || this.starting) return;
+    const memory = (this.offerMemory ??= new OfferMemory(this.config.agentId, sessionStore()));
+    if (memory.shown(key)) return;
+    memory.remember(key);
+    this.helpShown = offer;
+    this.helpOpenBtn.textContent = offer.message;
+    this.helpEl.hidden = false;
+  }
+
+  private hideHelp(): void {
+    this.helpShown = null;
+    if (this.built) this.helpEl.hidden = true;
+  }
+
+  // ---------------------------------------------------------------- page guide
+
+  /** Tells the agent about the page now, and again after the page changes, for this session. */
+  private startGuide(session: Session): void {
+    if (!this.config?.pageGuide || session.isClosed) return;
+    this.stopGuide();
+    this.guideSession = session;
+    try {
+      this.guideObserver = new MutationObserver((records) => {
+        for (const r of records) this.guideChanges += r.type === "childList" ? r.addedNodes.length + r.removedNodes.length : 1;
+        if (this.guideChanges >= GUIDE_BIG_CHANGE) this.scheduleGuide();
+      });
+      this.guideObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["hidden", "aria-hidden", "open", "aria-expanded"],
+      });
+    } catch {
+      this.guideObserver = null;
+    }
+    this.scheduleGuide(0);
+  }
+
+  private scheduleGuide(debounceMs = GUIDE_DEBOUNCE_MS): void {
+    if (!this.guideSession || this.guideTimer) return;
+    const wait = sendDelay(Date.now(), this.guideSentAt, debounceMs, GUIDE_MIN_GAP_MS);
+    this.guideTimer = window.setTimeout(() => {
+      this.guideTimer = 0;
+      this.guideChanges = 0;
+      this.sendGuide();
+    }, wait);
+  }
+
+  private sendGuide(): void {
+    const session = this.guideSession;
+    if (!session || session.isClosed || this.session !== session) return;
+    let snapshot: PageSnapshot;
+    try {
+      const { elements, byId } = collectFromDocument(document, this.guideIds);
+      this.guideMap = byId;
+      snapshot = { path: location.pathname.slice(0, 300), title: document.title.trim().slice(0, 200), elements };
+    } catch (err) {
+      console.warn("[Halochime] Could not read the page for the page guide", err);
+      return;
+    }
+    const sig = signature(`${snapshot.path} ${snapshot.title}`, snapshot.elements);
+    if (sig === this.guideSig) return;
+    this.guideSig = sig;
+    this.guideSentAt = Date.now();
+    void session.sendJson(TOPIC_PAGE, snapshot).catch(() => {
+      // The agent never joined or the room closed: the next change tries again.
+      if (this.guideSig === sig) this.guideSig = "";
+    });
+  }
+
+  private stopGuide(): void {
+    this.guideObserver?.disconnect();
+    this.guideObserver = null;
+    clearTimeout(this.guideTimer);
+    this.guideTimer = 0;
+    this.guideChanges = 0;
+    this.guideSession = null;
+    this.guideSig = "";
+    this.guideSentAt = null;
+    this.guideMap = new Map();
+    clearHighlight();
+    this.setPeek(false);
+  }
+
+  /** The agent pointed at an element: scroll to it and highlight it in the page for a few seconds. */
+  private pointAt(id: string, label: string): void {
+    const config = this.config;
+    const target = this.guideMap.get(id);
+    if (!config?.pageGuide || !target) return;
+    // Phones: the open panel covers the whole page, so it steps aside until the highlight goes.
+    const peek = this.isOpen && window.innerWidth <= PEEK_MAX_WIDTH;
+    if (peek) this.setPeek(true);
+    const shown = highlight(target, label.trim() || "Here", config.theme.color, onAccent(config.theme.color), () => this.setPeek(false));
+    if (!shown) this.setPeek(false);
+  }
+
+  private setPeek(on: boolean): void {
+    if (this.built) this.panel.classList.toggle("peek", on && this.isOpen);
   }
 
   private async sendMessage(): Promise<void> {
