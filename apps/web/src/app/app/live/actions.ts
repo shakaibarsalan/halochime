@@ -64,7 +64,6 @@ export async function sendStaffMessage(conversationId: string, text: string): Pr
     emailStaffReply({
       organizationId: ws.organizationId,
       conversationId: id.data,
-      staffName: visitorFacingName(ws.user.name),
       text: body.data,
     }),
   );

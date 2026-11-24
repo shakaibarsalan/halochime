@@ -35,7 +35,6 @@ assert.equal(parseStaffReply('{"id":"m2","name":"Sam","text":""}'), null);
 assert.equal(parseStaffReply('{"text":42}'), null);
 assert.equal(parseStaffReply("null"), null);
 
-assert.equal(staffLabel("Sam"), "Sam · Team");
-assert.equal(staffLabel(""), "Team");
+assert.equal(staffLabel(), "Team"); // never the team member's name
 
 console.log("staff: all checks passed");

@@ -867,11 +867,11 @@ export class TalkfrontWidget extends HTMLElement {
     return li;
   }
 
-  /** Text chats: a reply from a person on the business's team, on the agent's side, with their name. */
-  private addStaffBubble(name: string, text: string): HTMLLIElement {
+  /** Text chats: a reply from a person on the business's team, on the agent's side, labelled "Team" (never their name). */
+  private addStaffBubble(text: string): HTMLLIElement {
     const body = h("span", { class: "body" });
     renderRich(body, text);
-    const li = h("li", { class: "msg agent staff" }, h("span", { class: "who" }, staffLabel(name)), h("span", { class: "sr-only" }, ": "), body);
+    const li = h("li", { class: "msg agent staff" }, h("span", { class: "who" }, staffLabel()), h("span", { class: "sr-only" }, ": "), body);
     this.addItem(li);
     return li;
   }
@@ -1122,10 +1122,10 @@ export class TalkfrontWidget extends HTMLElement {
       staffNotice: ({ text }) => {
         if (isMine()) this.addSystemLine(text);
       },
-      staffReply: ({ name, text }) => {
+      staffReply: ({ text }) => {
         if (!isMine()) return;
         this.setTyping(false);
-        this.addStaffBubble(name, text);
+        this.addStaffBubble(text);
       },
       audioBlocked: (blocked) => {
         if (!isMine()) return;

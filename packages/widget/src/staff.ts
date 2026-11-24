@@ -46,7 +46,8 @@ export function parseStaffReply(raw: string): StaffReply | null {
   return { id: str(msg.id, 100), name: str(msg.name, MAX_NAME).replace(/\s+/g, " "), text };
 }
 
-/** The label above a team member's reply: "Sam · Team", or "Team" without a name. */
-export function staffLabel(name: string): string {
-  return name ? `${name} · Team` : "Team";
+/** The label above a team member's reply. Always "Team": visitors never see who from the team it was
+ * (owner, 24 Nov), even if an older agent still sends a name. */
+export function staffLabel(): string {
+  return "Team";
 }

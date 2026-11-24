@@ -524,15 +524,14 @@ export function minutesAddedEmail(opts: {
  */
 export function staffReplyEmail(opts: {
   workspace: string;
-  staffName: string;
   visitorName: string | null;
   messages: string[];
   pageUrl: string | null;
   replyable: boolean;
 }): Rendered {
+  // Never the team member's name (owner, 24 Nov): the visitor hears from "the team".
   const hi = firstName(opts.visitorName);
-  const from = opts.staffName.trim() || opts.workspace;
-  const subject = `${from} replied to your chat with ${opts.workspace}`;
+  const subject = `The ${opts.workspace} team replied to your chat`;
   const joined = opts.messages.join("\n\n");
   const continueLine = opts.replyable
     ? "Reply to this email to answer. It goes straight to the team."
@@ -543,7 +542,7 @@ export function staffReplyEmail(opts: {
     preheader: joined.replace(/\s+/g, " ").slice(0, 140),
     body: [
       heading(`A reply from ${esc(opts.workspace)}`),
-      p(`${hi ? `Hi ${esc(hi)}, ` : ""}${strong(from)} replied to your chat:`),
+      p(`${hi ? `Hi ${esc(hi)}, the ` : "The "}${strong(`${esc(opts.workspace)} team`)} replied to your chat:`),
       ...opts.messages.map((m) => quote(escLines(m))),
       p(continueLine, { muted: true, small: true }),
       opts.pageUrl ? button(opts.pageUrl, "Back to the website") : "",
@@ -552,7 +551,7 @@ export function staffReplyEmail(opts: {
     text: [
       `A reply from ${opts.workspace}`,
       "",
-      `${hi ? `Hi ${hi}, ` : ""}${from} replied to your chat:`,
+      `${hi ? `Hi ${hi}, the` : "The"} ${opts.workspace} team replied to your chat:`,
       "",
       ...opts.messages.flatMap((m) => [m, ""]),
       continueLine,

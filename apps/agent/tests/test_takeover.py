@@ -17,7 +17,10 @@ from talkfront_agent.takeover import (
     StaffCommand,
     StaffDesk,
     back_text,
+    joined_line_for_team,
+    joined_note_for_model,
     joined_text,
+    released_note_for_model,
     parse_staff_command,
 )
 from talkfront_agent.transcript import TranscriptBuffer
@@ -67,7 +70,10 @@ def test_long_values_are_cut() -> None:
 
 
 def test_wording() -> None:
-    assert joined_text("Sam") == "Sam from the team joined the chat"
+    # The visitor never sees the team member's name; the saved record does.
+    assert joined_text() == "A person from the team joined the chat"
+    assert joined_line_for_team("Sam") == "Sam from the team joined the chat"
+    assert "Sam" not in joined_note_for_model() and "Sam" not in released_note_for_model()
     assert back_text("Ava") == "You're back with Ava"
     assert back_text("  ") == "You're back with the assistant"
 

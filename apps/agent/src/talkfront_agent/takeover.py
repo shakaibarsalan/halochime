@@ -79,7 +79,14 @@ def parse_staff_command(data: bytes | str) -> StaffCommand | None:
     return None
 
 
-def joined_text(name: str) -> str:
+def joined_text() -> str:
+    """What the visitor sees when a person takes over. Never the team member's name (owner, 24 Nov):
+    visitors only see "Team"."""
+    return "A person from the team joined the chat"
+
+
+def joined_line_for_team(name: str) -> str:
+    """The same moment in the saved conversation, which only the business reads: who took over."""
     return f"{name or DEFAULT_STAFF_NAME} from the team joined the chat"
 
 
@@ -87,16 +94,17 @@ def back_text(agent_name: str) -> str:
     return f"You're back with {agent_name.strip() or 'the assistant'}"
 
 
-def joined_note_for_model(name: str) -> str:
+def joined_note_for_model() -> str:
+    # No name: the model must never tell the visitor who from the team it was.
     return (
-        f"{name or DEFAULT_STAFF_NAME}, a person from the team, has joined and is now talking with the visitor "
-        "directly. Their words appear as your replies. Do not answer while they are here."
+        "A person from the team has joined and is now talking with the visitor directly. Their words appear "
+        "as your replies. Do not answer while they are here."
     )
 
 
-def released_note_for_model(name: str) -> str:
+def released_note_for_model() -> str:
     return (
-        f"{name or DEFAULT_STAFF_NAME} from the team has left the conversation and you are answering again. "
+        "The person from the team has left the conversation and you are answering again. "
         "Everything they told the visitor is above, as your replies: stand by it, don't repeat it, and carry "
         "on helping the visitor from there. If the visitor said something the team member did not answer, "
         "answer that now. Don't say that the team member left or mention them by name (the visitor already "

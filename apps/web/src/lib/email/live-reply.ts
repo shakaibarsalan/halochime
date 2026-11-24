@@ -15,7 +15,7 @@ import { staffReplyEmail } from "./templates";
 
 const Email = z.email().max(320);
 
-async function deliver(organizationId: string, conversationId: string, staffName: string, messages: string[]): Promise<void> {
+async function deliver(organizationId: string, conversationId: string, messages: string[]): Promise<void> {
   if (messages.length === 0) return;
   if (!rateLimit(`staff-reply-email:${conversationId}`, 10, 3_600_000).ok) return;
   const [row] = await db
@@ -44,7 +44,6 @@ async function deliver(organizationId: string, conversationId: string, staffName
     to.data,
     staffReplyEmail({
       workspace: row.workspace,
-      staffName,
       visitorName: row.visitorName,
       messages,
       pageUrl,
@@ -58,11 +57,10 @@ async function deliver(organizationId: string, conversationId: string, staffName
 export async function emailStaffReply(opts: {
   organizationId: string;
   conversationId: string;
-  staffName: string;
   text: string;
 }): Promise<void> {
   try {
-    await deliver(opts.organizationId, opts.conversationId, opts.staffName, [opts.text]);
+    await deliver(opts.organizationId, opts.conversationId, [opts.text]);
   } catch (err) {
     console.error("[email] staff reply email failed", err);
   }

@@ -70,6 +70,7 @@ from .takeover import (
     TOPIC_STAFF_REPLY,
     StaffDesk,
     back_text,
+    joined_line_for_team,
     joined_note_for_model,
     joined_text,
     parse_staff_command,
@@ -1138,22 +1139,23 @@ async def entrypoint(ctx: JobContext) -> None:
 
     def _staff_joined(name: str) -> None:
         logger.info("a team member took the conversation over")
-        text = joined_text(name)
+        text = joined_text()
         if desk.spoken_pending == 0:
             with contextlib.suppress(Exception):
                 stopping = session.interrupt()  # the AI stops mid-reply
                 stopping.add_done_callback(lambda f: f.cancelled() or f.exception())
         _touch(by_user=False)
-        transcript.add("system", text, time.time())
-        _tell_widget(TOPIC_NOTICE, {"type": "joined", "name": name, "text": text})
-        _remember_soon("system", joined_note_for_model(name))
+        # The business's own record keeps who it was; the visitor only ever sees "the team".
+        transcript.add("system", joined_line_for_team(name), time.time())
+        _tell_widget(TOPIC_NOTICE, {"type": "joined", "text": text})
+        _remember_soon("system", joined_note_for_model())
 
     def _staff_said(text: str, name: str, message_id: str) -> None:
         _touch(by_user=False)
         unanswered["visitor"] = False
         transcript.add("staff", text, time.time())
         if runtime.mode == "text":
-            _tell_widget(TOPIC_STAFF_REPLY, {"id": message_id, "name": name, "text": text})
+            _tell_widget(TOPIC_STAFF_REPLY, {"id": message_id, "text": text})
             _remember_soon("assistant", text)
             return
         # Voice: the agent's voice says it word for word. The session adds it to the chat history as an
@@ -1172,9 +1174,9 @@ async def entrypoint(ctx: JobContext) -> None:
         text = back_text(runtime.agent.name)
         _touch(by_user=False)
         transcript.add("system", text, time.time())
-        _tell_widget(TOPIC_NOTICE, {"type": "left", "name": name, "text": text})
+        _tell_widget(TOPIC_NOTICE, {"type": "left", "text": text})
         # A visitor message the team member left unanswered gets the AI's answer now.
-        _remember_soon("system", released_note_for_model(name), answer_after=unanswered["visitor"])
+        _remember_soon("system", released_note_for_model(), answer_after=unanswered["visitor"])
         unanswered["visitor"] = False
         if auto:
             _keep_task(asyncio.ensure_future(api.release_takeover(meta.conversation_id)), "takeover release report")

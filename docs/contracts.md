@@ -135,9 +135,11 @@ widget-only features are off: live captions, the ready-made greeting audio, the 
   server (no sending participant), never on data a visitor's browser publishes on that topic.
 - While taken over the AI does not answer, check in or end the call. The visitor's words are saved as
   usual. "say": voice calls speak the text in the agent's voice (normal agent captions); text chats send
-  it on `tf.staff_reply` (JSON `{ id, name, text }`). Saved with role `staff`.
-- The agent tells the widget on `tf.notice` (JSON `{ type: "joined" | "left", text, name }`) and saves
-  the same words as `system` lines: "Sam from the team joined the chat", "You're back with Ava".
+  it on `tf.staff_reply` (JSON `{ id, text }`). Saved with role `staff`.
+- The agent tells the widget on `tf.notice` (JSON `{ type: "joined" | "left", text }`): "A person from the
+  team joined the chat", "You're back with Ava". The visitor never gets the team member's name (no name
+  in any payload, the widget labels staff replies "Team", the reply email says "the <workspace> team").
+  The saved `system` line keeps the name for the business: "Sam from the team joined the chat".
 - After 3 minutes with no command the agent hands back by itself and calls `takeover` (section 2).
   The model's chat history keeps what the team member said, so the AI carries on from there.
 
