@@ -515,3 +515,48 @@ export function minutesAddedEmail(opts: {
     ],
   });
 }
+
+// h. Live chat: a team member replied to a visitor -----------------------------------------------
+
+/**
+ * A copy of a team member's live-chat reply, sent to the visitor when they gave an email address.
+ * Reply-To is the business, so the visitor can carry on by email after leaving the page.
+ */
+export function staffReplyEmail(opts: {
+  workspace: string;
+  staffName: string;
+  visitorName: string | null;
+  messages: string[];
+  pageUrl: string | null;
+  replyable: boolean;
+}): Rendered {
+  const hi = firstName(opts.visitorName);
+  const from = opts.staffName.trim() || opts.workspace;
+  const subject = `${from} replied to your chat with ${opts.workspace}`;
+  const joined = opts.messages.join("\n\n");
+  const continueLine = opts.replyable
+    ? "Reply to this email to answer. It goes straight to the team."
+    : "You can carry on the chat on the website.";
+  return render({
+    template: "live-staff-reply",
+    subject,
+    preheader: joined.replace(/\s+/g, " ").slice(0, 140),
+    body: [
+      heading(`A reply from ${esc(opts.workspace)}`),
+      p(`${hi ? `Hi ${esc(hi)}, ` : ""}${strong(from)} replied to your chat:`),
+      ...opts.messages.map((m) => quote(escLines(m))),
+      p(continueLine, { muted: true, small: true }),
+      opts.pageUrl ? button(opts.pageUrl, "Back to the website") : "",
+    ].join("\n"),
+    footer: `You got this email because you chatted with ${opts.workspace} and shared this address. Halochime sends it on their behalf.`,
+    text: [
+      `A reply from ${opts.workspace}`,
+      "",
+      `${hi ? `Hi ${hi}, ` : ""}${from} replied to your chat:`,
+      "",
+      ...opts.messages.flatMap((m) => [m, ""]),
+      continueLine,
+      ...(opts.pageUrl ? ["", `Back to the website: ${opts.pageUrl}`] : []),
+    ],
+  });
+}
