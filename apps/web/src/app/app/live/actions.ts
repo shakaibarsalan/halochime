@@ -5,6 +5,8 @@ import { MAX_STAFF_MESSAGE, memberDisplayName, visitorFacingName } from "@/lib/l
 import { liveRoom, sendStaffCommand, setTakeover, type SendResult } from "@/lib/live";
 import { rateLimit } from "@/lib/rate-limit";
 import { requireWorkspace } from "@/lib/session";
+import { emailStaffReply } from "@/lib/email/live-reply";
+import { inBackground } from "@/lib/email/send";
 
 // Any member of the workspace may take a live conversation over: everyone who can open the workspace's
 // conversations can see them (app/app/conversations). Every action is scoped to the active workspace.
@@ -57,6 +59,15 @@ export async function sendStaffMessage(conversationId: string, text: string): Pr
     name: visitorFacingName(ws.user.name),
   });
   if (sent !== "sent") return { ok: false, error: sendError(sent) };
+  // The visitor may have closed the page: when they shared an email, they get the reply there too.
+  inBackground("staff reply email", () =>
+    emailStaffReply({
+      organizationId: ws.organizationId,
+      conversationId: id.data,
+      staffName: visitorFacingName(ws.user.name),
+      text: body.data,
+    }),
+  );
   return { ok: true };
 }
 
