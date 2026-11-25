@@ -93,7 +93,7 @@ async function request<T>(url: string, init: RequestInit): Promise<T> {
 const DEFAULT_COLOR = "#2563eb";
 
 /** Light runtime check of the config shape (no zod in the bundle). Fills safe defaults. */
-function normalizeConfig(raw: Partial<WidgetConfigResponse>): WidgetConfigResponse {
+export function normalizeConfig(raw: Partial<WidgetConfigResponse>): WidgetConfigResponse {
   const modes = Array.isArray(raw.modes)
     ? raw.modes.filter((m): m is ConversationMode => m === "voice" || m === "text")
     : [];
@@ -115,6 +115,8 @@ function normalizeConfig(raw: Partial<WidgetConfigResponse>): WidgetConfigRespon
       appearance: (WIDGET_APPEARANCES as readonly string[]).includes(theme.appearance as string)
         ? theme.appearance
         : "light",
+      // The agent's "Opens on" (missing = talking).
+      ...(theme.startMode === "text" || theme.startMode === "voice" ? { startMode: theme.startMode } : {}),
     },
     ...(typeof raw.livekitUrl === "string" && /^wss?:\/\//.test(raw.livekitUrl) ? { livekitUrl: raw.livekitUrl } : {}),
     ...(typeof raw.greetingAudioUrl === "string" && /^https?:\/\//.test(raw.greetingAudioUrl)

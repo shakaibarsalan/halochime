@@ -259,10 +259,18 @@ export class TalkfrontWidget extends HTMLElement {
   private guideChanges = 0;
   private guideSession: Session | null = null;
 
+  /** data-start-mode on the script tag: wins over the agent's "Opens on" setting. */
+  private hostStartMode: ConversationMode | null = null;
+
   /** Called by the loader before the element is attached. */
   setup(key: string, api: string): void {
     this.key = key;
     this.api = api;
+  }
+
+  /** What the chat opens on (script tag data-start-mode), if the agent allows that mode. */
+  setStartMode(mode: ConversationMode): void {
+    this.hostStartMode = mode;
   }
 
   /** Sets (token) or forgets (null) the signed-in visitor for the next conversation. */
@@ -381,7 +389,9 @@ export class TalkfrontWidget extends HTMLElement {
     try {
       const config = await fetchConfig(this.api, this.key, getVisitorId());
       this.config = config;
-      this.mode = config.modes.includes("voice") ? "voice" : config.modes[0]!;
+      // The page's data-start-mode, else the agent's "Opens on" (talking unless set to typing).
+      const preferred = this.hostStartMode ?? config.theme.startMode ?? "voice";
+      this.mode = config.modes.includes(preferred) ? preferred : config.modes[0]!;
       this.applyTheme(config);
       this.preloadGreeting(config);
       this.clearNotice();

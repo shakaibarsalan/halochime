@@ -48,6 +48,7 @@ const AgentForm = z.object({
   themeLabel: z.string().trim().min(1, "Button label is required.").max(40),
   themeIcon: z.enum(WIDGET_ICONS),
   themeAppearance: z.enum(WIDGET_APPEARANCES),
+  themeStartMode: z.enum(["voice", "text"]).optional(),
   modes: z.array(z.enum(["voice", "text"])).min(1, "Turn on at least one mode (voice or text)."),
   allowedDomains: z.string().max(5000),
   published: z.boolean(),
@@ -143,6 +144,8 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
         label: f.themeLabel,
         icon: f.themeIcon,
         appearance: f.themeAppearance,
+        // Talking stays the default (no key), so agents saved before this setting open as they did.
+        ...(f.themeStartMode === "text" ? { startMode: "text" as const } : {}),
         ...(imageVersion ? { imageVersion } : {}),
       },
       modes: f.modes,

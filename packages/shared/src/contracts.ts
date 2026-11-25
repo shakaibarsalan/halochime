@@ -35,6 +35,8 @@ export const WidgetTheme = z.object({
   icon: z.enum(WIDGET_ICONS).optional(),
   /** Missing = "light". */
   appearance: z.enum(WIDGET_APPEARANCES).optional(),
+  /** What the chat opens on when talking and typing are both on. Missing = talking ("voice"). */
+  startMode: ConversationMode.optional(),
   /** Changes whenever a new picture is uploaded, so the picture's URL (and caches) change too. */
   imageVersion: z.string().optional(),
 });

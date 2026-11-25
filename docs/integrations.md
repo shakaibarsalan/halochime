@@ -56,6 +56,9 @@ window.Halochime = window.Halochime || { q: [] };
 | `Halochime.offerHelp({ reason, message })` | Shows the proactive help bubble next to the launcher (e.g. after a failed checkout). Needs proactive help on for the agent. `reason` up to 60 characters, `message` up to 120 (default: the agent's offerHelp message). Never while the panel is open or a conversation runs; at most once per page and reason per visit (sessionStorage). Tapping it opens the panel and the next conversation carries the offer |
 
 The token can also be given on the tag: `data-identity-token="eyJ..."` (server-rendered pages).
+`data-start-mode="text"` (or `"voice"`) on the tag makes the chat open on typing (or talking) on that page,
+whatever the agent's "Opens on" setting says (dashboard, Agent, Widget; talking by default). It only applies
+when the agent has both modes on.
 Pre-load queue: if `window.Halochime.q` is an array of `[method, ...args]` when the script loads, the loader
 runs them in order after mounting (after `data-identity-token`, so a queued `identify` wins). After load,
 `Halochime.q.push([...])` runs the call at once, so `window.Halochime.q.push(["identify", { token }])` works

@@ -296,6 +296,16 @@ export function AgentEditor({
               </Select>
             </Field>
             <Field
+              label="Opens on"
+              htmlFor="themeStartMode"
+              hint="When talking and typing are both on. Visitors can switch with one tap (the microphone in the typing box)."
+            >
+              <Select id="themeStartMode" name="themeStartMode" defaultValue={agent.theme.startMode ?? "voice"}>
+                <option value="voice">Talking</option>
+                <option value="text">Typing</option>
+              </Select>
+            </Field>
+            <Field
               label="Theme colour"
               htmlFor="themeColorText"
               error={HEX.test(color) ? undefined : "Use a hex colour like #4f46e5."}

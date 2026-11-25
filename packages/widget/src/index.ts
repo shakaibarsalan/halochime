@@ -3,7 +3,7 @@ import { TAG, TalkfrontWidget, type SwitchOptions } from "./widget";
 /**
  * Loader for:
  *   <script src="https://APP_URL/widget.js" data-key="pk_..." [data-api="https://APP_URL"]
- *           [data-identity-token="eyJ..."] async></script>
+ *           [data-identity-token="eyJ..."] [data-start-mode="text"|"voice"] async></script>
  * Mounts one <talkfront-widget> on document.body and exposes window.Halochime (docs/integrations.md §2).
  * window.Talkfront, the product's earlier name, is the same object, so pages written for it keep working.
  *
@@ -75,6 +75,14 @@ function resolveApi(script: HTMLScriptElement | null): string {
   return location.origin;
 }
 
+/** data-start-mode: "text"/"typing" or "voice"/"talking"; anything else is ignored. */
+function startModeOf(value: string | null | undefined): "voice" | "text" | null {
+  const v = value?.trim().toLowerCase();
+  if (v === "text" || v === "typing") return "text";
+  if (v === "voice" || v === "talking") return "voice";
+  return null;
+}
+
 function boot(): void {
   if (window.__talkfrontLoaded) return; // script included twice
   const script = findScript();
@@ -90,6 +98,10 @@ function boot(): void {
   const existing = document.querySelector(TAG);
   const el = existing instanceof TalkfrontWidget ? existing : (document.createElement(TAG) as TalkfrontWidget);
   if (!existing) el.setup(key, resolveApi(script));
+
+  // Open on typing or talking on this page, whatever the agent's "Opens on" setting says.
+  const startMode = startModeOf(script?.getAttribute("data-start-mode"));
+  if (startMode) el.setStartMode(startMode);
 
   const tagToken = script?.getAttribute("data-identity-token")?.trim();
   if (tagToken) {
