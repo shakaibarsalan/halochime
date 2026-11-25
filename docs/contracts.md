@@ -82,6 +82,10 @@ with 401 otherwise. These routes are never called by browsers, so no CORS.
 - `runtime` also says `pageGuide: true` (page guide on) and `helpOffer: { reason, message, opener }` (the
   visitor came from the help bubble; voice calls start with `opener` instead of the greeting). Both absent
   when off.
+- `runtime.agent.noDashes: true` when the agent's "No dashes in replies" switch is on (column
+  `agents.no_dashes`, off by default): the agent turns em dashes and spaced en dashes in its replies into
+  commas, in the text the visitor sees and in the saved transcript (apps/agent/src/talkfront_agent/dashes.py).
+  Number ranges keep an unspaced en dash (3–5).
 - One chat, several conversations: when the visitor switches between typing and talking in the same
   widget (Talk/Type, or the microphone in the typing box), the widget sends `continueFrom` (the previous
   conversation id) in `WidgetSessionRequest`. The session route links the new conversation to it

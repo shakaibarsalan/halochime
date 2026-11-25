@@ -42,6 +42,7 @@ const AgentForm = z.object({
   llmModel: oneOf(LLM_MODELS),
   maxDurationMin: z.coerce.number().int().min(1).max(60),
   handoffEnabled: z.boolean(),
+  noDashes: z.boolean(),
   handoffEmail: z.union([z.literal(""), z.email("Handoff email is not a valid email.").max(320)]),
   themeColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Colour must look like #4f46e5."),
   themePosition: z.enum(["bottom-right", "bottom-left"]),
@@ -65,6 +66,7 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
     handoffEmail: formData.get("handoffEmail") ?? "",
     allowedDomains: formData.get("allowedDomains") ?? "",
     handoffEnabled: formData.get("handoffEnabled") === "on",
+    noDashes: formData.get("noDashes") === "on",
     published: formData.get("published") === "on",
     modes: formData.getAll("modes"),
   });
@@ -137,6 +139,7 @@ export async function saveAgent(_prev: ActionState, formData: FormData): Promise
       llmModel: f.llmModel,
       maxDurationSec: f.maxDurationMin * 60,
       handoffEnabled: f.handoffEnabled,
+      noDashes: f.noDashes,
       handoffEmail: manager ? f.handoffEmail || null : current.handoffEmail,
       theme: {
         color: f.themeColor.toLowerCase(),

@@ -1,0 +1,1 @@
+ALTER TABLE "agents" ADD COLUMN "no_dashes" boolean DEFAULT false NOT NULL;

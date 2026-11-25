@@ -94,6 +94,8 @@ export const agents = pgTable(
       .notNull()
       .default({ color: "#4f46e5", position: "bottom-right", label: "Talk to us" }),
     handoffEnabled: boolean("handoff_enabled").notNull().default(true),
+    /** "No dashes in replies": the agent turns em dashes and spaced en dashes into commas (off by default). */
+    noDashes: boolean("no_dashes").notNull().default(false),
     handoffEmail: text("handoff_email"),
     maxDurationSec: integer("max_duration_sec").notNull().default(900),
     /**

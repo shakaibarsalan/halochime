@@ -187,6 +187,8 @@ export const RuntimeConfig = z.object({
     }),
     maxDurationSec: z.number().int().positive(),
     handoffEnabled: z.boolean(),
+    /** "No dashes in replies" is on: em dashes and spaced en dashes in replies become commas. Absent = off. */
+    noDashes: z.boolean().optional(),
   }),
   visitor: z.object({
     id: z.string().nullable(),

@@ -100,6 +100,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
               llmModel: agent.llmModel,
               maxDurationSec: agent.maxDurationSec,
               handoffEnabled: agent.handoffEnabled,
+              noDashes: agent.noDashes,
               handoffEmail: agent.handoffEmail ?? "",
               theme: agent.theme,
               imageUrl: agent.theme.imageVersion

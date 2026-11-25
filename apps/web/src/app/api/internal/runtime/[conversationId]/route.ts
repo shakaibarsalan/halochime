@@ -117,6 +117,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ conversationId:
       },
       maxDurationSec: a.maxDurationSec,
       handoffEnabled: a.handoffEnabled,
+      ...(row.agent.noDashes ? { noDashes: true } : {}),
     },
     visitor: {
       id: c.visitorId,

@@ -168,6 +168,8 @@ class AgentRuntime:
     max_duration_sec: int
     handoff_enabled: bool
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    # "No dashes in replies" (dashes.py): em dashes and spaced en dashes become commas.
+    no_dashes: bool = False
 
 
 AttributeValue = str | int | float | bool
@@ -300,6 +302,7 @@ def parse_runtime_config(data: Any) -> RuntimeConfig:
             max_duration_sec=max_duration,
             handoff_enabled=handoff,
             voice=_parse_voice(agent.get("voice")),
+            no_dashes=agent.get("noDashes") is True,
         ),
         visitor=VisitorInfo(
             id=_nullable_str(visitor, "id", "visitor"),

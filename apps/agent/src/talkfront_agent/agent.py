@@ -58,6 +58,7 @@ from .api import (
     build_end_request,
     parse_dispatch_metadata,
 )
+from .dashes import clean_dash_stream, clean_dashes
 from . import greeting_cache
 from . import aec
 from .echo import EchoGuard, began_at, script_of, spoken_duration
@@ -387,9 +388,12 @@ class TalkfrontAgent(Agent):
         conversation_id: str = "",
         realtime: bool = False,
         echo: EchoGuard | None = None,
+        no_dashes: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        # "No dashes in replies": the text the visitor sees (and the saved transcript) has none.
+        self._no_dashes = no_dashes
         self._api = api
         self._conversation_id = conversation_id
         self._realtime = realtime
@@ -549,7 +553,10 @@ class TalkfrontAgent(Agent):
             return None
 
     async def transcription_node(self, text, model_settings):  # type: ignore[no-untyped-def]
-        async for delta in Agent.default.transcription_node(self, text, model_settings):
+        stream = Agent.default.transcription_node(self, text, model_settings)
+        if self._no_dashes:
+            stream = clean_dash_stream(str(d) async for d in stream)
+        async for delta in stream:
             if self._echo is not None:
                 self._echo.agent_said(str(delta))
             yield delta
@@ -1247,6 +1254,8 @@ async def entrypoint(ctx: JobContext) -> None:
                 unanswered["visitor"] = True
             # A team member's words spoken by the agent's voice were saved as "staff" already.
             staff_words = item.role == "assistant" and desk.claim_spoken()
+            if text and item.role == "assistant" and not staff_words and runtime.agent.no_dashes:
+                text = clean_dashes(text)  # usually already clean (transcription_node); this makes sure
             if text and not staff_words:
                 transcript.add(item.role, text, created_at)
             if item.metrics:
@@ -1357,6 +1366,7 @@ async def entrypoint(ctx: JobContext) -> None:
         conversation_id=runtime.conversation_id,
         realtime=realtime,
         echo=echo if runtime.mode == "voice" else None,
+        no_dashes=runtime.agent.no_dashes,
     )
     agent.on_echo = _on_echo
     agent.taken_over = lambda: desk.active

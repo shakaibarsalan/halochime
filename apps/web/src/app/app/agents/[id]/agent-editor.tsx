@@ -29,6 +29,7 @@ export type EditableAgent = {
   llmModel: string;
   maxDurationSec: number;
   handoffEnabled: boolean;
+  noDashes: boolean;
   handoffEmail: string;
   theme: WidgetTheme;
   /** The uploaded icon picture, if there is one. */
@@ -210,6 +211,12 @@ export function AgentEditor({
           >
             <Textarea id="instructions" name="instructions" defaultValue={agent.instructions} maxLength={8000} rows={6} />
           </Field>
+          <Toggle
+            name="noDashes"
+            defaultChecked={agent.noDashes}
+            label="No dashes in replies"
+            hint="Long dashes (—) and spaced dashes ( – ) in the AI's replies become commas, on screen and in the saved chat. Number ranges like 3–5 stay."
+          />
           <Toggle
             name="handoffEnabled"
             defaultChecked={agent.handoffEnabled}
