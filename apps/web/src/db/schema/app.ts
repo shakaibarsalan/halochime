@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   customType,
   index,
@@ -208,6 +209,11 @@ export const conversations = pgTable(
     agentVersionId: text("agent_version_id").references(() => agentVersions.id, { onDelete: "set null" }),
     /** The A/B test that picked the version. */
     abTestId: text("ab_test_id").references(() => agentAbTests.id, { onDelete: "set null" }),
+    /**
+     * The earlier conversation this one continues in the same widget (the visitor switched between
+     * typing and talking). The agent gets what was said there. null = a fresh conversation.
+     */
+    continuedFromId: text("continued_from_id").references((): AnyPgColumn => conversations.id, { onDelete: "set null" }),
   },
   (t) => [
     index("conversations_org_started_idx").on(t.organizationId, t.startedAt.desc()),

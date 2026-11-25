@@ -2,6 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 import type { CollectedData, CollectedValue, CollectFieldType } from "@talkfront/shared";
 import { ClipboardList, FileText, Flag, Info, ListTree } from "lucide-react";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Card, CardHeader, cx, EmptyState, ModeBadge, PageHeader } from "@/components/ui";
 import { db } from "@/db";
@@ -45,6 +46,17 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
     ["Duration", c.status === "active" ? "In progress" : formatDuration(c.durationSec)],
     ["Ended because", c.endedReason?.replace(/_/g, " ") ?? "-"],
     ["Visitor", [c.visitorName, c.visitorEmail].filter(Boolean).join(" · ") || "Anonymous"],
+    // One chat in the widget, switched between typing and talking: the conversation it carried on from.
+    ...(c.continuedFromId
+      ? ([
+          [
+            "Continues",
+            <Link key="cf" href={`/app/conversations/${c.continuedFromId}`} className="text-brand-700 hover:underline">
+              The earlier part of this chat
+            </Link>,
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
     [
       "Page",
       c.pageUrl && /^https?:\/\//i.test(c.pageUrl) ? (

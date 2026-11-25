@@ -1,4 +1,5 @@
 import type { ConversationMode, VisitorAttributes } from "@talkfront/shared";
+import { earlierChatSection, type EarlierLine } from "./earlier-chat";
 import { languageLabel } from "./languages";
 
 export type PromptInput = {
@@ -35,6 +36,8 @@ export type PromptInput = {
   pageGuide?: boolean;
   /** The visitor opened the chat from the help bubble (proactive help). */
   helpOffer?: { reason: string | null; message: string } | null;
+  /** The end of the earlier conversations this one continues in the same widget (typing, then talking). */
+  earlierChat?: EarlierLine[];
 };
 
 /** One line, no control characters: values from tokens must not change the prompt's layout. */
@@ -69,6 +72,8 @@ export function buildSystemPrompt(p: PromptInput): string {
 
   sections.push(visitorSection(p));
   if (p.helpOffer) sections.push(helpOfferSection(p.helpOffer));
+  const earlier = earlierChatSection(p.earlierChat ?? []);
+  if (earlier) sections.push(earlier);
 
   const facts = [
     "With each visitor message you may get a system note with knowledge base results for it, found automatically. Answer factual questions about the business or about what you can do from it: products, services, prices, plans, policies, hours, languages, availability, contact details, how things work. \"Do you offer X?\" is a factual question too. Never answer such a question from memory.",

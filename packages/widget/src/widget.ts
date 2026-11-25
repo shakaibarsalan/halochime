@@ -150,6 +150,13 @@ export class TalkfrontWidget extends HTMLElement {
   /** The visitor's mic stays silent while that greeting plays, so the agent never hears it as their words. */
   private greetingMic: LocalAudioTrack | null = null;
   private conversationHasContent = false;
+  /**
+   * The last conversation started in this chat window. The next one (typing, then talking, then typing
+   * again) continues it, so the agent knows what was said before. Kept after a call ends.
+   */
+  private lastConversationId: string | null = null;
+  /** The call was started from the microphone in the typing box: when it ends, go back to typing. */
+  private returnToTyping = false;
   /** After a failed start, typing no longer auto-connects until the visitor presses Send or Retry. */
   private prewarmBlocked = false;
 
@@ -217,6 +224,7 @@ export class TalkfrontWidget extends HTMLElement {
   private textForm!: HTMLFormElement;
   private input!: HTMLInputElement;
   private sendBtn!: HTMLButtonElement;
+  private typeMicBtn!: HTMLButtonElement;
   private brandEl!: HTMLDivElement;
   private brandLink!: HTMLAnchorElement;
   private audioEl!: HTMLAudioElement;
@@ -536,7 +544,11 @@ export class TalkfrontWidget extends HTMLElement {
       this.switchBtn,
     );
     this.endBtn = h("button", { type: "button", class: "end-btn", "aria-label": "End conversation", hidden: true }, "End");
-    this.endBtn.addEventListener("click", () => void this.endSession("Conversation ended"));
+    this.endBtn.addEventListener("click", () => {
+      const wasCall = this.liveVoiceSession() !== null || this.starting?.mode === "voice";
+      void this.endSession("Conversation ended");
+      if (wasCall) this.backToTyping();
+    });
     const topRow = h("div", { class: "footer-row" }, this.modesEl, this.endBtn);
 
     // Voice controls
@@ -556,7 +568,14 @@ export class TalkfrontWidget extends HTMLElement {
       "aria-label": "Message",
     });
     this.sendBtn = h("button", { type: "submit", class: "send", "aria-label": "Send message", disabled: true }, icon(ICON_SEND));
-    this.textForm = h("form", { class: "text", hidden: true }, this.input, this.sendBtn);
+    // Talk right from the typing box, in the same chat: the agent already knows what was typed.
+    this.typeMicBtn = h(
+      "button",
+      { type: "button", class: "type-mic", "aria-label": "Talk instead", title: "Talk instead", hidden: true },
+      icon(ICON_MIC),
+    );
+    this.typeMicBtn.addEventListener("click", () => this.talkFromTyping());
+    this.textForm = h("form", { class: "text", hidden: true }, this.input, this.typeMicBtn, this.sendBtn);
     this.textForm.addEventListener("submit", (e) => {
       e.preventDefault();
       void this.sendMessage();
@@ -635,6 +654,7 @@ export class TalkfrontWidget extends HTMLElement {
     const inVoiceCall = this.mode === "voice" && this.liveVoiceSession() !== null;
     this.textForm.hidden = !ready || (this.mode !== "text" && !inVoiceCall);
     this.input.placeholder = inVoiceCall ? "Or type here, e.g. your email…" : "Type your message…";
+    this.typeMicBtn.hidden = this.mode !== "text" || !modes.includes("voice");
     this.endBtn.hidden = !this.session && !this.starting;
 
     // Empty state
@@ -1027,6 +1047,8 @@ export class TalkfrontWidget extends HTMLElement {
     // Opened from the help bubble: the agent opens with help about it (so no ready-made greeting).
     const offer = this.pendingOffer;
     this.pendingOffer = null;
+    // Same chat window, something already said: this conversation carries on from the last one.
+    const continueFrom = this.conversationHasContent ? this.lastConversationId : null;
     try {
       // Voice: the greeting plays once the microphone is open and the sound has settled, never before:
       // not while the browser still asks for the microphone (5 Nov), and not into the switch to call
@@ -1048,7 +1070,8 @@ export class TalkfrontWidget extends HTMLElement {
           mic.stop();
           return null;
         }
-        greeting = offer ? null : this.playLocalGreeting();
+        // Help offers and continued chats open with a reply about them, never the ready-made "Hi".
+        greeting = offer || continueFrom ? null : this.playLocalGreeting();
       }
       const greetingPlayed = greeting ? await greeting : false;
       if (mic && this.localGreetingPlaying) {
@@ -1064,8 +1087,12 @@ export class TalkfrontWidget extends HTMLElement {
         ...(this.identityToken ? { identityToken: this.identityToken } : {}),
         ...(greetingPlayed ? { greetingPlayed: true } : {}),
         ...(offer ? { helpOffer: offer } : {}),
+        ...(continueFrom ? { continueFrom } : {}),
         page: pageInfo(),
       });
+      // Even a start that is cancelled below created a conversation (linked to the one before), so
+      // the chain stays whole.
+      this.lastConversationId = info.conversationId;
       if (!isCurrent()) {
         await session.end();
         return null;
@@ -1157,6 +1184,7 @@ export class TalkfrontWidget extends HTMLElement {
         this.addDivider("Conversation ended");
         if (reason === "connection_lost") this.showError(new WidgetError("network"));
         this.render();
+        this.backToTyping();
       },
     };
   }
@@ -1185,15 +1213,40 @@ export class TalkfrontWidget extends HTMLElement {
     if (mode === this.mode) return;
     const wasRunning = !!this.session || !!this.starting;
     this.mode = mode;
+    this.returnToTyping = false;
     this.clearNotice();
     if (wasRunning) {
-      await this.endSession(mode === "voice" ? "Switched to talking" : "Switched to typing");
+      // startSession ends the running one itself, and starts the new one within this tap: browsers
+      // allow the microphone prompt and sound only there (awaiting the old room first lost that).
+      this.addDivider(mode === "voice" ? "Switched to talking" : "Switched to typing");
       void this.startSession(mode);
     } else {
       this.render();
     }
     if (mode === "text" && !isTouchDevice()) this.input.focus();
     else if (mode === "voice") this.micBtn.focus();
+  }
+
+  /** The microphone in the typing box: start talking now, in the same chat. Runs within the tap. */
+  private talkFromTyping(): void {
+    if (!this.config?.modes.includes("voice") || this.mode !== "text") return;
+    const wasRunning = !!this.session || !!this.starting;
+    this.mode = "voice";
+    this.clearNotice();
+    if (wasRunning) this.addDivider("Switched to talking");
+    void this.startSession("voice");
+    this.returnToTyping = this.config.modes.includes("text");
+    if (!isTouchDevice()) this.micBtn.focus();
+  }
+
+  /** After a call started from the typing box ends, the typing box comes back for a follow-up. */
+  private backToTyping(): void {
+    if (!this.returnToTyping) return;
+    this.returnToTyping = false;
+    if (this.mode !== "voice" || this.session || this.starting || !this.config?.modes.includes("text")) return;
+    this.mode = "text";
+    this.render();
+    if (this.isOpen && !isTouchDevice()) this.input.focus();
   }
 
   private async onMicClick(): Promise<void> {

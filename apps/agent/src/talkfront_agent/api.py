@@ -205,6 +205,15 @@ class HelpOffer:
 
 
 @dataclass(frozen=True)
+class Continuation:
+    """The conversation continues an earlier one in the same widget (typing, then talking). The system
+    prompt already holds what was said there."""
+
+    # Voice: instructions for the first reply, said instead of the plain greeting.
+    opener: str
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     conversation_id: str
     mode: ConversationMode
@@ -214,6 +223,7 @@ class RuntimeConfig:
     # Page guide on: read the visitor's page (tf.page) and offer point_to.
     page_guide: bool = False
     help_offer: HelpOffer | None = None
+    continuation: Continuation | None = None
 
 
 def _obj(data: Any, path: str) -> dict[str, Any]:
@@ -301,7 +311,18 @@ def parse_runtime_config(data: Any) -> RuntimeConfig:
         actions=_parse_actions(root.get("actions")),
         page_guide=root.get("pageGuide") is True,
         help_offer=_parse_help_offer(root.get("helpOffer")),
+        continuation=_parse_continuation(root.get("continuation")),
     )
+
+
+def _parse_continuation(value: Any) -> Continuation | None:
+    """Lenient: an older web app sends nothing, and a malformed one just means a normal start."""
+    if not isinstance(value, dict):
+        return None
+    opener = value.get("opener")
+    if not isinstance(opener, str) or not opener.strip():
+        return None
+    return Continuation(opener=opener)
 
 
 def _parse_help_offer(value: Any) -> HelpOffer | None:

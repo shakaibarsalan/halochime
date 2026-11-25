@@ -1,0 +1,2 @@
+ALTER TABLE "conversations" ADD COLUMN "continued_from_id" text;--> statement-breakpoint
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_continued_from_id_conversations_id_fk" FOREIGN KEY ("continued_from_id") REFERENCES "public"."conversations"("id") ON DELETE set null ON UPDATE no action;

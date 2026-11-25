@@ -1469,10 +1469,18 @@ async def entrypoint(ctx: JobContext) -> None:
     started_at = time.monotonic()
     greeting = runtime.agent.greeting.strip()
     offer = runtime.help_offer
+    continuation = runtime.continuation
     if offer is not None and runtime.mode == "voice" and not meta.greeting_played:
         # Opened from the help bubble: one opener that greets and offers help with what it was about
         # (the widget does not play its ready-made greeting for these calls).
         session.generate_reply(instructions=offer.opener)
+    elif continuation is not None and runtime.mode == "voice" and not meta.greeting_played:
+        # The visitor tapped the microphone in a chat that already has messages: pick up where it left
+        # off instead of saying hello again (the widget skips its ready-made greeting for these too).
+        session.generate_reply(instructions=continuation.opener)
+    elif continuation is not None and runtime.mode == "text":
+        # A continued text chat: the greeting was said at the start of the chat, not again here.
+        pass
     elif greeting and runtime.mode == "text":
         # A text chat starts with the visitor's first message, and the widget already shows the
         # greeting above it. Saying it now would land after their question, so only record it.

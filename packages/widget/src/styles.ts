@@ -598,6 +598,16 @@ button:disabled { cursor: default; }
 .send:hover:not(:disabled) { transform: translateX(1px); }
 .send:active:not(:disabled) { transform: scale(0.94); }
 .send:disabled { background: var(--tf-surface-2); color: var(--tf-faint); box-shadow: none; }
+.type-mic {
+  width: 40px; height: 40px; border-radius: 11px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--tf-muted);
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.type-mic .icon { width: 19px; height: 19px; }
+.type-mic:hover { background: var(--tf-surface-2); color: var(--tf-fg); }
+.type-mic:active { transform: scale(0.94); }
+.type-mic:focus-visible { outline-offset: 1px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

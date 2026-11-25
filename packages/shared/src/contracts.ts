@@ -82,6 +82,11 @@ export const WidgetSessionRequest = z.object({
     .optional(),
   /** The visitor opened the chat from the proactive help bubble. Ignored unless proactive help is on. */
   helpOffer: HelpOffer.optional(),
+  /**
+   * The conversation this one continues in the same widget (typing, then talking, then typing again):
+   * the agent gets what was said there. Used only when it belongs to the same visitor and agent.
+   */
+  continueFrom: z.string().min(1).max(64).optional(),
 });
 export type WidgetSessionRequest = z.infer<typeof WidgetSessionRequest>;
 
@@ -206,6 +211,12 @@ export const RuntimeConfig = z.object({
    * made from these instructions instead of the plain greeting. Absent = a normal start.
    */
   helpOffer: z.object({ reason: z.string().nullable(), message: z.string(), opener: z.string() }).optional(),
+  /**
+   * This conversation continues an earlier one in the same widget; the system prompt already holds
+   * what was said there. `opener`: voice calls start with a reply made from these instructions
+   * instead of the plain greeting. Absent = a fresh conversation.
+   */
+  continuation: z.object({ opener: z.string() }).optional(),
 });
 export type RuntimeConfig = z.infer<typeof RuntimeConfig>;
 

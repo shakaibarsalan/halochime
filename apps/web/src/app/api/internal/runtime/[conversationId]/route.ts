@@ -11,11 +11,13 @@ import { getConversationWithAgent } from "@/lib/conversations";
 import { apiError } from "@/lib/http";
 import { checkInternalAuth } from "@/lib/internal-auth";
 import { sttLanguage } from "@/lib/languages";
+import { continueOpener } from "@/lib/earlier-chat";
 import { buildSystemPrompt, helpOpener } from "@/lib/prompt";
 import { cloneIdOf, runtimeVoice, speaksManyLanguages } from "@/lib/voices";
 import { conversationSnapshot } from "@/lib/versions/server";
 import { applySnapshot } from "@/lib/versions/snapshot";
 import { loadPageHelp } from "@/lib/widget/page-help";
+import { loadEarlierChat } from "@/lib/widget/continuation";
 
 export async function GET(req: Request, ctx: { params: Promise<{ conversationId: string }> }) {
   const denied = checkInternalAuth(req);
@@ -45,13 +47,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ conversationId:
   const integrationTools = await loadIntegrationTools(c.organizationId, a.id, businessActions.map((x) => x.name));
   const actions = [...businessActions, ...integrationTools];
   const verified = c.visitorVerified;
-  const [pageHelp, [offer]] = await Promise.all([
+  const [pageHelp, [offer], earlierChat] = await Promise.all([
     loadPageHelp(a.id),
     db
       .select({ reason: conversationHelpOffers.reason, message: conversationHelpOffers.message })
       .from(conversationHelpOffers)
       .where(and(eq(conversationHelpOffers.conversationId, c.id), eq(conversationHelpOffers.organizationId, c.organizationId)))
       .limit(1),
+    // The visitor switched between typing and talking: what was said before (may wait ~2 s for it).
+    c.continuedFromId ? loadEarlierChat(c) : Promise.resolve([]),
   ]);
   const helpOffer = offer ? { reason: offer.reason, message: offer.message } : null;
 
@@ -99,6 +103,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ conversationId:
           .map((f) => ({ label: f.label, description: f.description, options: f.options })),
         pageGuide: pageHelp.pageGuide,
         helpOffer,
+        earlierChat,
       }),
       stt: { provider: "deepgram", model: a.sttModel, language: sttLanguage(a.language) },
       llm: { provider: llmProvider(a.llmModel), model: a.llmModel, temperature: a.temperature },
@@ -123,6 +128,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ conversationId:
     actions,
     ...(pageHelp.pageGuide ? { pageGuide: true } : {}),
     ...(helpOffer ? { helpOffer: { ...helpOffer, opener: helpOpener(a.name, helpOffer) } } : {}),
+    ...(earlierChat.length > 0 ? { continuation: { opener: continueOpener() } } : {}),
   };
   return NextResponse.json(body);
 }

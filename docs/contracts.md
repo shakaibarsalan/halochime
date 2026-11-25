@@ -82,6 +82,17 @@ with 401 otherwise. These routes are never called by browsers, so no CORS.
 - `runtime` also says `pageGuide: true` (page guide on) and `helpOffer: { reason, message, opener }` (the
   visitor came from the help bubble; voice calls start with `opener` instead of the greeting). Both absent
   when off.
+- One chat, several conversations: when the visitor switches between typing and talking in the same
+  widget (Talk/Type, or the microphone in the typing box), the widget sends `continueFrom` (the previous
+  conversation id) in `WidgetSessionRequest`. The session route links the new conversation to it
+  (`conversations.continued_from_id`) only if it is the same workspace, agent and visitor id, from the
+  web widget and under 6 hours old; a name or email given earlier carries over (unverified). `runtime`
+  then adds an "Earlier in this chat" section to `systemPrompt` (the last 20 visitor/AI/team lines,
+  at most 4,000 characters, across up to 5 linked conversations, marked as a record and not
+  instructions; it waits up to 2.5 s for the previous conversation to end so its last lines are saved),
+  and `continuation: { opener }`: voice calls start with `opener` (pick up where the chat left off)
+  instead of the greeting, and the widget skips its ready-made greeting audio for them. Absent when
+  there is nothing to carry over.
 - `knowledge/search` only searches chunks of the conversation's workspace whose source is shared
   (`agent_id is null`) or belongs to that agent.
 - `end` is idempotent: it marks the conversation ended, stores `durationSec`, deducts voice seconds

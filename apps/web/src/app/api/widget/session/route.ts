@@ -14,6 +14,7 @@ import { visitorKeyFor } from "@/lib/versions/split";
 import { corsHeaders } from "@/lib/widget-origin";
 import { acceptedHelpOffer } from "@/lib/page-help";
 import { loadPageHelp } from "@/lib/widget/page-help";
+import { continuableFrom } from "@/lib/widget/continuation";
 
 // First, cheap layer: per IP, in memory, so per Vercel instance only. The real limits (per agent,
 // per workspace, voice credit) are counted in the database by startSessionWithinLimits below.
@@ -54,6 +55,10 @@ export async function POST(req: Request) {
   const version = await pickVersion(agent, visitorKeyFor(input.visitorId, identity?.sub, conversationId));
   // Only looked up when the visitor came from the help bubble; kept only if proactive help is on.
   const helpOffer = input.helpOffer ? acceptedHelpOffer(await loadPageHelp(agent.id), input.helpOffer) : null;
+  // Switching between typing and talking keeps one chat: the agent gets what was said before, but only
+  // from this visitor's own recent conversation with this agent.
+  const visitorId = identity?.sub ?? input.visitorId ?? null;
+  const earlier = input.continueFrom ? await continuableFrom(input.continueFrom, agent, visitorId) : null;
   // Per-agent burst, per-workspace running conversations and (voice) credit for every running call,
   // counted and inserted under one lock so parallel requests cannot all slip past the limits.
   const refusal = await startSessionWithinLimits(
@@ -64,14 +69,16 @@ export async function POST(req: Request) {
         organizationId: agent.organizationId,
         agentId: agent.id,
         mode: input.mode,
-        visitorId: identity?.sub ?? input.visitorId ?? null,
-        visitorName: identity?.name ?? null,
-        visitorEmail: identity?.email ?? null,
+        visitorId,
+        // A name or email given earlier in the same chat carries over (not verified, like before).
+        visitorName: identity?.name ?? earlier?.visitorName ?? null,
+        visitorEmail: identity?.email ?? earlier?.visitorEmail ?? null,
         visitorVerified: identity !== null,
         visitorAttributes: identity?.attributes ?? null,
         pageUrl: cleanPageUrl(input.page?.url),
         pageTitle: input.page?.title ?? null,
         roomName: roomNameFor(conversationId),
+        ...(earlier ? { continuedFromId: earlier.id } : {}),
         ...(version ? { agentVersionId: version.versionId, abTestId: version.testId } : {}),
       });
       if (helpOffer) {
