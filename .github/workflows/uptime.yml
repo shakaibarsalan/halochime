@@ -82,7 +82,7 @@ jobs:
           }
 
           attendify_config() {
-            get "$SITE/api/widget/config?key=$ATTENDIFY_KEY" "https://attendify.pro"
+            get "$SITE/api/widget/config?key=$ATTENDIFY_KEY" "https://attendify.cc"
           }
 
           check "home page returns 200" home
